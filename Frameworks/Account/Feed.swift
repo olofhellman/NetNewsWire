@@ -39,6 +39,10 @@ public final class Feed: DisplayNameProvider, Renamable, UnreadCountProvider, Ha
 		}
 	}
 
+	// Note: this is available only if the icon URL was available in the feed.
+	// The icon URL is a JSON-Feed-only feature.
+	// Otherwise we find an icon URL via other means, but we don’t store it
+	// as part of feed metadata.
 	public var iconURL: String? {
 		get {
 			return metadata.iconURL
@@ -48,6 +52,10 @@ public final class Feed: DisplayNameProvider, Renamable, UnreadCountProvider, Ha
 		}
 	}
 
+	// Note: this is available only if the favicon URL was available in the feed.
+	// The favicon URL is a JSON-Feed-only feature.
+	// Otherwise we find a favicon URL via other means, but we don’t store it
+	// as part of feed metadata.
 	public var faviconURL: String? {
 		get {
 			return metadata.faviconURL
@@ -57,18 +65,7 @@ public final class Feed: DisplayNameProvider, Renamable, UnreadCountProvider, Ha
 		}
 	}
 
-	public var name: String? {
-		get {
-			return metadata.name
-		}
-		set {
-			let oldNameForDisplay = nameForDisplay
-			metadata.name = newValue
-			if oldNameForDisplay != newValue {
-				postDisplayNameDidChangeNotification()
-			}
-		}
-	}
+	public var name: String?
 
 	public var authors: Set<Author>? {
 		get {
@@ -126,6 +123,15 @@ public final class Feed: DisplayNameProvider, Renamable, UnreadCountProvider, Ha
 		}
 	}
 
+	public var isArticleExtractorAlwaysOn: Bool? {
+		get {
+			return metadata.isArticleExtractorAlwaysOn
+		}
+		set {
+			metadata.isArticleExtractorAlwaysOn = newValue
+		}
+	}
+	
 	public var subscriptionID: String? {
 		get {
 			return metadata.subscriptionID
@@ -179,10 +185,11 @@ public final class Feed: DisplayNameProvider, Renamable, UnreadCountProvider, Ha
 		}
 	}
 
+	var metadata: FeedMetadata
+
 	// MARK: - Private
 
 	private let accountID: String // Used for hashing and equality; account may turn nil
-	private let metadata: FeedMetadata
 
 	// MARK: - Init
 
@@ -218,7 +225,7 @@ public final class Feed: DisplayNameProvider, Renamable, UnreadCountProvider, Ha
 
 extension Feed: OPMLRepresentable {
 
-	public func OPMLString(indentLevel: Int) -> String {
+	public func OPMLString(indentLevel: Int, strictConformance: Bool) -> String {
 		// https://github.com/brentsimmons/NetNewsWire/issues/527
 		// Don’t use nameForDisplay because that can result in a feed name "Untitled" written to disk,
 		// which NetNewsWire may take later to be the actual name.

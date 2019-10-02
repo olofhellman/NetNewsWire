@@ -15,7 +15,9 @@ import RSWeb
 enum DetailState: Equatable {
 	case noSelection
 	case multipleSelection
+	case loading
 	case article(Article)
+	case extracted(Article, ExtractedArticle)
 }
 
 final class DetailViewController: NSViewController, WKUIDelegate {
@@ -68,10 +70,10 @@ final class DetailViewController: NSViewController, WKUIDelegate {
 	
 	func focus() {
 		
-		guard let window = currentWebViewController.view.window else {
+		guard let window = currentWebViewController.webView.window else {
 			return
 		}
-		window.makeFirstResponderUnlessDescendantIsFirstResponder(currentWebViewController.view)
+		window.makeFirstResponderUnlessDescendantIsFirstResponder(currentWebViewController.webView)
 	}
 	
 }

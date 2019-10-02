@@ -2,9 +2,7 @@
 
 [![CircleCI](https://circleci.com/gh/brentsimmons/NetNewsWire.svg?style=svg)](https://circleci.com/gh/brentsimmons/NetNewsWire)
 
-It’s a free and open source feed reader for macOS.
-
-It’s not in beta just yet. Getting close! While NetNewsWire 5.0 is feature-complete as of May 25, 2019, it has known bugs — and, surely, plenty of unknown bugs.
+It’s a free and open source feed reader for macOS. An iOS version is in progress.
 
 It supports [RSS](http://cyber.harvard.edu/rss/rss.html), [Atom](https://tools.ietf.org/html/rfc4287), [JSON Feed](https://jsonfeed.org/), and [RSS-in-JSON](https://github.com/scripting/Scripting-News/blob/master/rss-in-json/README.md) formats.
 
@@ -18,7 +16,7 @@ Here’s [How to Support NetNewsWire](Technotes/HowToSupportNetNewsWire.markdown
 
 #### Community
 
-[Join the Slack group](https://join.slack.com/t/netnewswire/shared_invite/enQtNjM4MDA1MjQzMDkzLTNlNjBhOWVhYzdhYjA4ZWFhMzQ1MTUxYjU0NTE5ZGY0YzYwZWJhNjYwNTNmNTg2NjIwYWY4YzhlYzk5NmU3ZTc) to talk with other NetNewsWire users — and to help out, if you’d like to, by testing, coding, writing, providing feedback, or just helping us think things through. Everybody is welcome and encouraged to join.
+[Join the Slack group](https://ranchero.com/netnewswire/slack) to talk with other NetNewsWire users — and to help out, if you’d like to, by testing, coding, writing, providing feedback, or just helping us think things through. Everybody is welcome and encouraged to join.
 
 Every community member is expected to abide by the code of conduct which is included in the [Contributing](CONTRIBUTING.md) page.
 
@@ -48,7 +46,7 @@ aDirectory/
   SharedXcodeSettings/
     DeveloperSettings.xcconfig
   NetNewsWire
-    NewNewsSire.xcworkspace
+    NetNewsWire.xcworkspace
 ```
 
 Then create a plain text file in it: `SharedXcodeSettings/DeveloperSettings.xcconfig` and
@@ -58,6 +56,7 @@ give it the contents:
 CODE_SIGN_IDENTITY = Mac Developer
 DEVELOPMENT_TEAM = <Your Team ID>
 CODE_SIGN_STYLE = Automatic
+ORGANIZATION_IDENTIFIER = <Your Domain Name Reversed>
 PROVISIONING_PROFILE_SPECIFIER =
 ```
 

@@ -13,33 +13,62 @@ import Account
 
 struct ArticleRenderer {
 
+	typealias Rendering = (style: String, html: String)
+	typealias Page = (html: String, baseURL: URL)
+
+	static var page: Page = {
+		let pageURL = Bundle.main.url(forResource: "page", withExtension: "html")!
+		let html = try! String(contentsOf: pageURL)
+		let baseURL = pageURL.deletingLastPathComponent()
+		return Page(html: html, baseURL: baseURL)
+	}()
+	
 	private let article: Article?
+	private let extractedArticle: ExtractedArticle?
 	private let articleStyle: ArticleStyle
 	private let title: String
+	private let body: String
 	private let baseURL: String?
 
-	private init(article: Article?, style: ArticleStyle) {
+	private init(article: Article?, extractedArticle: ExtractedArticle?, style: ArticleStyle) {
 		self.article = article
+		self.extractedArticle = extractedArticle
 		self.articleStyle = style
 		self.title = article?.title ?? ""
-		self.baseURL = article?.baseURL?.absoluteString
+		if let content = extractedArticle?.content {
+			self.body = content
+			self.baseURL = extractedArticle?.url
+		} else {
+			self.body = article?.body ?? ""
+			self.baseURL = article?.baseURL?.absoluteString
+		}
 	}
 
 	// MARK: - API
 
-	static func articleHTML(article: Article, style: ArticleStyle) -> String {
-		let renderer = ArticleRenderer(article: article, style: style)
-		return renderer.articleHTML
+	static func articleHTML(article: Article, extractedArticle: ExtractedArticle? = nil, style: ArticleStyle) -> Rendering {
+		let renderer = ArticleRenderer(article: article, extractedArticle: extractedArticle, style: style)
+		return (renderer.styleString(), renderer.articleHTML)
 	}
 
-	static func multipleSelectionHTML(style: ArticleStyle) -> String {
-		let renderer = ArticleRenderer(article: nil, style: style)
-		return renderer.multipleSelectionHTML
+	static func multipleSelectionHTML(style: ArticleStyle) -> Rendering {
+		let renderer = ArticleRenderer(article: nil, extractedArticle: nil, style: style)
+		return (renderer.styleString(), renderer.multipleSelectionHTML)
 	}
 
-	static func noSelectionHTML(style: ArticleStyle) -> String {
-		let renderer = ArticleRenderer(article: nil, style: style)
-		return renderer.noSelectionHTML
+	static func loadingHTML(style: ArticleStyle) -> Rendering {
+		let renderer = ArticleRenderer(article: nil, extractedArticle: nil, style: style)
+		return (renderer.styleString(), renderer.loadingHTML)
+	}
+
+	static func noSelectionHTML(style: ArticleStyle) -> Rendering {
+		let renderer = ArticleRenderer(article: nil, extractedArticle: nil, style: style)
+		return (renderer.styleString(), renderer.noSelectionHTML)
+	}
+	
+	static func noContentHTML(style: ArticleStyle) -> Rendering {
+		let renderer = ArticleRenderer(article: nil, extractedArticle: nil, style: style)
+		return (renderer.styleString(), renderer.noContentHTML)
 	}
 }
 
@@ -48,7 +77,7 @@ struct ArticleRenderer {
 private extension ArticleRenderer {
 
 	private var articleHTML: String {
-		let body = RSMacroProcessor.renderedText(withTemplate: template(), substitutions: substitutions(), macroStart: "[[", macroEnd: "]]")
+		let body = RSMacroProcessor.renderedText(withTemplate: template(), substitutions: articleSubstitutions(), macroStart: "[[", macroEnd: "]]")
 		return renderHTML(withBody: body)
 	}
 
@@ -57,9 +86,18 @@ private extension ArticleRenderer {
 		return renderHTML(withBody: body)
 	}
 
+	private var loadingHTML: String {
+		let body = "<h3 class='systemMessage'>Loading...</h3>"
+		return renderHTML(withBody: body)
+	}
+
 	private var noSelectionHTML: String {
 		let body = "<h3 class='systemMessage'>No selection</h3>"
 		return renderHTML(withBody: body)
+	}
+
+	private var noContentHTML: String {
+		return renderHTML(withBody: "")
 	}
 
 	static var faviconImgTagCache = [Feed: String]()
@@ -92,7 +130,7 @@ private extension ArticleRenderer {
 		return title
 	}
 
-	func substitutions() -> [String: String] {
+	func articleSubstitutions() -> [String: String] {
 		var d = [String: String]()
 
 		guard let article = article else {
@@ -103,7 +141,6 @@ private extension ArticleRenderer {
 		let title = titleOrTitleLink()
 		d["title"] = title
 
-		let body = article.body ?? ""
 		d["body"] = body
 
 		d["avatars"] = ""
@@ -165,7 +202,7 @@ private extension ArticleRenderer {
 			return cachedImgTag
 		}
 
-		if let favicon = appDelegate.faviconDownloader.favicon(for: feed) {
+		if let favicon = appDelegate.faviconDownloader.faviconAsAvatar(for: feed) {
 			if let s = base64String(forImage: favicon) {
 				var dimension = min(favicon.size.height, CGFloat(ArticleRenderer.avatarDimension)) // Assuming square images.
 				dimension = max(dimension, 16) // Some favicons say they’re < 16. Force them larger.
@@ -312,71 +349,17 @@ private extension ArticleRenderer {
 		return dateFormatter.string(from: date)
 	}
 
-	#if os(macOS)
-	
 	func renderHTML(withBody body: String) -> String {
-
-		var s = "<!DOCTYPE html><html><head>\n\n"
+		var s = ""
 		if let baseURL = baseURL {
 			s += ("<base href=\"" + baseURL + "\"\n>")
 		}
 		s += title.htmlBySurroundingWithTag("title")
-		s += styleString().htmlBySurroundingWithTag("style")
-
-		s += """
-
-		<script type="text/javascript">
-
-		function startup() {
-			var anchors = document.getElementsByTagName("a");
-			for (var i = 0; i < anchors.length; i++) {
-				anchors[i].addEventListener("mouseenter", function() { mouseDidEnterLink(this) });
-				anchors[i].addEventListener("mouseleave", function() { mouseDidExitLink(this) });
-			}
-		}
-
-		function mouseDidEnterLink(anchor) {
-			window.webkit.messageHandlers.mouseDidEnter.postMessage(anchor.href);
-		}
-
-		function mouseDidExitLink(anchor) {
-			window.webkit.messageHandlers.mouseDidExit.postMessage(anchor.href);
-		}
-
-		</script>
-
-		"""
 		
-		s += "\n\n</head><body onload='startup()'>\n\n"
 		s += body
-		s += "\n\n</body></html>"
-
-		//print(s)
-
 		return s
 	}
-	
-	#else
-	
-	func renderHTML(withBody body: String) -> String {
-		
-		var s = "<!DOCTYPE html><html><head>\n"
-		if let baseURL = baseURL {
-			s += ("<base href=\"" + baseURL + "\"\n>")
-		}
-		s += "<meta name=\"viewport\" content=\"width=device-width\">\n"
-		s += title.htmlBySurroundingWithTag("title")
-		s += styleString().htmlBySurroundingWithTag("style")
-		s += "\n\n</head><body>\n\n"
-		s += body
-		s += "\n\n</body></html>"
-		
-		return s
-		
-	}
-	
-	#endif
-	
+
 }
 
 // MARK: - Article extension

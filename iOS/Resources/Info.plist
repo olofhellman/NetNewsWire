@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>AppGroup</key>
+	<string>group.$(ORGANIZATION_IDENTIFIER).NetNewsWire.iOS</string>
+	<key>AppIdentifierPrefix</key>
+	<string>$(AppIdentifierPrefix)</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.ranchero.NetNewsWire.FeedRefresh</string>
@@ -52,6 +56,16 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>com.ranchero.NetNewsWire.NextUnread</string>
+		<string>com.ranchero.NetNewsWire.SelectFeed</string>
+		<string>com.ranchero.NetNewsWire.SelectFolder</string>
+		<string>com.ranchero.NetNewsWire.SelectAllUnread</string>
+		<string>com.ranchero.NetNewsWire.SelectStarred</string>
+		<string>com.ranchero.NetNewsWire.SelectToday</string>
+		<string>com.ranchero.NetNewsWire.ReadArticle</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -76,7 +90,9 @@
 		<string>fetch</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
-	<string>LaunchScreen</string>
+	<string>LaunchScreenPhone</string>
+	<key>UILaunchStoryboardName~ipad</key>
+	<string>LaunchScreenPad</string>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arm64</string>

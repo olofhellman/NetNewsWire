@@ -32,11 +32,8 @@ class MasterUnreadIndicatorView: UIView {
 	}()
 	
     override func draw(_ dirtyRect: CGRect) {
-		if isSelected {
-			AppAssets.selectedTextColor.setFill()
-		} else {
-			AppAssets.timelineUnreadCircleColor.setFill()
-		}
+		let color = isSelected ? AppAssets.tableViewCellHighlightedTextColor : AppAssets.secondaryAccentColor
+		color.setFill()
 		MasterUnreadIndicatorView.bezierPath.fill()
     }
     

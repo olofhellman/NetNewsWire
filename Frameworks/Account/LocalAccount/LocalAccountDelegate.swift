@@ -18,9 +18,7 @@ public enum LocalAccountDelegateError: String, Error {
 
 final class LocalAccountDelegate: AccountDelegate {
 	
-	let isSubfoldersSupported = false
-	let isTagBasedSystem = false
-	let isOPMLImportSupported = true
+	let behaviors: AccountBehaviors = []
 	let isOPMLImportInProgress = false
 	
 	let server: String? = nil
@@ -77,11 +75,14 @@ final class LocalAccountDelegate: AccountDelegate {
 			return
 		}
 
-		// We use the same mechanism to load local accounts as we do to load the subscription
-		// OPML all accounts.
-		BatchUpdate.shared.perform {
-			account.loadOPML(loadDocument)
+		guard let children = loadDocument.children else {
+			return
 		}
+
+		BatchUpdate.shared.perform {
+			account.loadOPMLItems(children, parentFolder: nil)
+		}
+		
 		completion(.success(()))
 
 	}

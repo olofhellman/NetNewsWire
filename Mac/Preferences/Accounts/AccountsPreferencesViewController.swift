@@ -25,8 +25,9 @@ final class AccountsPreferencesViewController: NSViewController {
 		tableView.dataSource = self
 		
 		NotificationCenter.default.addObserver(self, selector: #selector(displayNameDidChange(_:)), name: .DisplayNameDidChange, object: nil)
-		NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChangeNotification(_:)), name: .AccountsDidChange, object: nil)
-		
+		NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChange(_:)), name: .UserDidAddAccount, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChange(_:)), name: .UserDidDeleteAccount, object: nil)
+
 		showController(AccountsAddViewController())
 
 		// Fix tableView frame — for some reason IB wants it 1pt wider than the clip view. This leads to unwanted horizontal scrolling.
@@ -72,7 +73,7 @@ final class AccountsPreferencesViewController: NSViewController {
 		tableView.reloadData()
 	}
 	
-	@objc func accountsDidChangeNotification(_ note: Notification) {
+	@objc func accountsDidChange(_ note: Notification) {
 		updateSortedAccounts()
 		tableView.reloadData()
 	}
@@ -106,9 +107,11 @@ extension AccountsPreferencesViewController: NSTableViewDelegate {
 			case .onMyMac:
 				cell.imageView?.image = AppAssets.accountLocal
 			case .feedbin:
-				cell.imageView?.image = NSImage(named: "accountFeedbin")
+				cell.imageView?.image = AppAssets.accountFeedbin
 			case .freshRSS:
 				cell.imageView?.image = AppAssets.accountFreshRSS
+			case .feedly:
+				cell.imageView?.image = AppAssets.accountFeedly
 			default:
 				break
 			}

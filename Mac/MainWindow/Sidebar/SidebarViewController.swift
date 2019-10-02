@@ -52,8 +52,9 @@ protocol SidebarDelegate: class {
 
 		NotificationCenter.default.addObserver(self, selector: #selector(unreadCountDidChange(_:)), name: .UnreadCountDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(containerChildrenDidChange(_:)), name: .ChildrenDidChange, object: nil)
-		NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChangeNotification(_:)), name: .AccountsDidChange, object: nil)
-		NotificationCenter.default.addObserver(self, selector: #selector(accountStateDidChangeNotification(_:)), name: .AccountStateDidChange, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChange(_:)), name: .UserDidAddAccount, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChange(_:)), name: .UserDidDeleteAccount, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(accountStateDidChange(_:)), name: .AccountStateDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(userDidAddFeed(_:)), name: .UserDidAddFeed, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(batchUpdateDidPerform(_:)), name: .BatchUpdateDidPerform, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(faviconDidBecomeAvailable(_:)), name: .FaviconDidBecomeAvailable, object: nil)
@@ -83,18 +84,23 @@ protocol SidebarDelegate: class {
 		guard let representedObject = note.object else {
 			return
 		}
-		configureUnreadCountForCellsForRepresentedObject(representedObject as AnyObject)
+		if let timelineViewController = representedObject as? TimelineViewController {
+			configureUnreadCountForCellsForRepresentedObjects(timelineViewController.representedObjects)
+		}
+		else {
+			configureUnreadCountForCellsForRepresentedObjects([representedObject as AnyObject])
+		}
 	}
 
 	@objc func containerChildrenDidChange(_ note: Notification) {
 		rebuildTreeAndRestoreSelection()
 	}
 
-	@objc func accountsDidChangeNotification(_ notification: Notification) {
+	@objc func accountsDidChange(_ notification: Notification) {
 		rebuildTreeAndRestoreSelection()
 	}
 	
-	@objc func accountStateDidChangeNotification(_ notification: Notification) {
+	@objc func accountStateDidChange(_ notification: Notification) {
 		rebuildTreeAndRestoreSelection()
 	}
 
@@ -276,7 +282,7 @@ protocol SidebarDelegate: class {
 	func deleteNodes(_ nodes: [Node]) {
 		let nodesToDelete = treeController.normalizedSelectedNodes(nodes)
 		
-		guard let undoManager = undoManager, let deleteCommand = DeleteCommand(nodesToDelete: nodesToDelete, treeController: treeController, undoManager: undoManager, errorHandler: ErrorHandler.present) else {
+		guard let undoManager = undoManager, let deleteCommand = DeleteCommand(nodesToDelete: nodesToDelete, undoManager: undoManager, errorHandler: ErrorHandler.present) else {
 			return
 		}
 		
@@ -358,9 +364,8 @@ private extension SidebarViewController {
 
 	func rebuildTreeAndReloadDataIfNeeded() {
 		if !animatingChanges && !BatchUpdate.shared.isPerforming {
-			if treeController.rebuild() {
-				outlineView.reloadData()
-			}
+			treeController.rebuild()
+			outlineView.reloadData()
 		}
 	}
 
@@ -502,7 +507,7 @@ private extension SidebarViewController {
 		// then the unread count comes from the timeline.
 		// This ensures that any transients in the timeline
 		// are accounted for in the unread count.
-		if selectedNodes.count == 1 && node === selectedNodes.first! {
+		if nodeShouldGetUnreadCountFromTimeline(node) {
 			return delegate?.unreadCount(for: node.representedObject) ?? 0
 		}
 
@@ -510,6 +515,18 @@ private extension SidebarViewController {
 			return unreadCountProvider.unreadCount
 		}
 		return 0
+	}
+
+	func nodeShouldGetUnreadCountFromTimeline(_ node: Node) -> Bool {
+		// Only if it’s selected and it’s the only node selected.
+		return selectedNodes.count == 1 && selectedNodes.first! === node
+	}
+
+	func nodeRepresentsTodayFeed(_ node: Node) -> Bool {
+		guard let smartFeed = node.representedObject as? SmartFeed else {
+			return false
+		}
+		return smartFeed === SmartFeedsController.shared.todayFeed
 	}
 
 	func cellForRowView(_ rowView: NSTableRowView) -> SidebarCell? {
@@ -537,8 +554,13 @@ private extension SidebarViewController {
 		applyToCellsForRepresentedObject(representedObject, configure)
 	}
 
-	func configureUnreadCountForCellsForRepresentedObject(_ representedObject: AnyObject) {
-		applyToCellsForRepresentedObject(representedObject, configureUnreadCount)
+	func configureUnreadCountForCellsForRepresentedObjects(_ representedObjects: [AnyObject]?) {
+		guard let representedObjects = representedObjects else {
+			return
+		}
+		for object in representedObjects {
+			applyToCellsForRepresentedObject(object, configureUnreadCount)
+		}
 	}
 
 	@discardableResult

@@ -20,6 +20,7 @@ final class ArticlesTable: DatabaseTable {
 	private let statusesTable: StatusesTable
 	private let authorsLookupTable: DatabaseLookupTable
 	private let attachmentsLookupTable: DatabaseLookupTable
+	private var databaseArticlesCache = [String: DatabaseArticle]()
 
 	private lazy var searchTable: SearchTable = {
 		return SearchTable(queue: queue, articlesTable: self)
@@ -146,12 +147,23 @@ final class ArticlesTable: DatabaseTable {
 
 	// MARK: - Fetching Search Articles
 
-	func fetchArticlesMatching(_ searchString: String, _ feedIDs: Set<String>) -> Set<Article> {
+	func fetchArticlesMatching(_ searchString: String) -> Set<Article> {
 		var articles: Set<Article> = Set<Article>()
 		queue.fetchSync { (database) in
 			articles = self.fetchArticlesMatching(searchString, database)
 		}
+		return articles
+	}
+
+	func fetchArticlesMatching(_ searchString: String, _ feedIDs: Set<String>) -> Set<Article> {
+		var articles = fetchArticlesMatching(searchString)
 		articles = articles.filter{ feedIDs.contains($0.feedID) }
+		return articles
+	}
+
+	func fetchArticlesMatchingWithArticleIDs(_ searchString: String, _ articleIDs: Set<String>) -> Set<Article> {
+		var articles = fetchArticlesMatching(searchString)
+		articles = articles.filter{ articleIDs.contains($0.articleID) }
 		return articles
 	}
 
@@ -159,24 +171,20 @@ final class ArticlesTable: DatabaseTable {
 		fetchArticlesAsync({ self.fetchArticlesMatching(searchString, feedIDs, $0) }, callback)
 	}
 
-	private func fetchArticlesMatching(_ searchString: String, _ feedIDs: Set<String>, _ database: FMDatabase) -> Set<Article> {
-		let sql = "select rowid from search where search match ?;"
-		let sqlSearchString = sqliteSearchString(with: searchString)
-		let searchStringParameters = [sqlSearchString]
-		guard let resultSet = database.executeQuery(sql, withArgumentsIn: searchStringParameters) else {
-			return Set<Article>()
-		}
-		let searchRowIDs = resultSet.mapToSet { $0.longLongInt(forColumnIndex: 0) }
-		if searchRowIDs.isEmpty {
-			return Set<Article>()
-		}
+	func fetchArticlesMatchingWithArticleIDsAsync(_ searchString: String, _ articleIDs: Set<String>, _ callback: @escaping ArticleSetBlock) {
+		fetchArticlesAsync({ self.fetchArticlesMatchingWithArticleIDs(searchString, articleIDs, $0) }, callback)
+	}
 
-		let placeholders = NSString.rs_SQLValueList(withPlaceholders: UInt(searchRowIDs.count))!
-		let whereClause = "searchRowID in \(placeholders)"
-		let parameters: [AnyObject] = Array(searchRowIDs) as [AnyObject]
-		let articles = fetchArticlesWithWhereClause(database, whereClause: whereClause, parameters: parameters, withLimits: true)
+	private func fetchArticlesMatching(_ searchString: String, _ feedIDs: Set<String>, _ database: FMDatabase) -> Set<Article> {
+		let articles = fetchArticlesMatching(searchString, database)
 		// TODO: include the feedIDs in the SQL rather than filtering here.
 		return articles.filter{ feedIDs.contains($0.feedID) }
+	}
+
+	private func fetchArticlesMatchingWithArticleIDs(_ searchString: String, _ articleIDs: Set<String>, _ database: FMDatabase) -> Set<Article> {
+		let articles = fetchArticlesMatching(searchString, database)
+		// TODO: include the articleIDs in the SQL rather than filtering here.
+		return articles.filter{ articleIDs.contains($0.articleID) }
 	}
 
 	// MARK: - Fetching Articles for Indexer
@@ -267,9 +275,9 @@ final class ArticlesTable: DatabaseTable {
 		}
 	}
 
-	func ensureStatuses(_ articleIDs: Set<String>, _ statusKey: ArticleStatus.Key, _ flag: Bool) {
+	func ensureStatuses(_ articleIDs: Set<String>, _ defaultRead: Bool, _ statusKey: ArticleStatus.Key, _ flag: Bool) {
 		self.queue.update { (database) in
-			let statusesDictionary = self.statusesTable.ensureStatusesForArticleIDs(articleIDs, false, database)
+			let statusesDictionary = self.statusesTable.ensureStatusesForArticleIDs(articleIDs, defaultRead, database)
 			let statuses = Set(statusesDictionary.values)
 			self.statusesTable.mark(statuses, statusKey, flag, database)
 		}
@@ -371,16 +379,16 @@ final class ArticlesTable: DatabaseTable {
 
 	// MARK: - Statuses
 	
-	func fetchUnreadArticleIDs(_ callback: @escaping (Set<String>) -> Void) {
-		statusesTable.fetchUnreadArticleIDs(callback)
+	func fetchUnreadArticleIDs() -> Set<String>{
+		return statusesTable.fetchUnreadArticleIDs()
 	}
 	
-	func fetchStarredArticleIDs(_ callback: @escaping (Set<String>) -> Void) {
-		statusesTable.fetchStarredArticleIDs(callback)
+	func fetchStarredArticleIDs() -> Set<String> {
+		return statusesTable.fetchStarredArticleIDs()
 	}
 	
-	func fetchArticleIDsForStatusesWithoutArticles(_ callback: @escaping (Set<String>) -> Void) {
-		statusesTable.fetchArticleIDsForStatusesWithoutArticles(callback)
+	func fetchArticleIDsForStatusesWithoutArticles() -> Set<String> {
+		return statusesTable.fetchArticleIDsForStatusesWithoutArticles()
 	}
 	
 	func mark(_ articles: Set<Article>, _ statusKey: ArticleStatus.Key, _ flag: Bool) -> Set<ArticleStatus>? {
@@ -475,16 +483,21 @@ private extension ArticlesTable {
 	func makeDatabaseArticles(with resultSet: FMResultSet) -> Set<DatabaseArticle> {
 		let articles = resultSet.mapToSet { (row) -> DatabaseArticle? in
 
-			// The resultSet is a result of a JOIN query with the statuses table,
-			// so we can get the statuses at the same time and avoid additional database lookups.
-
-			guard let status = statusesTable.statusWithRow(resultSet) else {
-				assertionFailure("Expected status.")
+			guard let articleID = row.string(forColumn: DatabaseKey.articleID) else {
+				assertionFailure("Expected articleID.")
 				return nil
 			}
 
-			guard let articleID = row.string(forColumn: DatabaseKey.articleID) else {
-				assertionFailure("Expected articleID.")
+			// Articles are removed from the cache when they’re updated.
+			// See saveUpdatedArticles.
+			if let databaseArticle = databaseArticlesCache[articleID] {
+				return databaseArticle
+			}
+
+			// The resultSet is a result of a JOIN query with the statuses table,
+			// so we can get the statuses at the same time and avoid additional database lookups.
+			guard let status = statusesTable.statusWithRow(resultSet, articleID: articleID) else {
+				assertionFailure("Expected status.")
 				return nil
 			}
 			guard let feedID = row.string(forColumn: DatabaseKey.feedID) else {
@@ -507,7 +520,9 @@ private extension ArticlesTable {
 			let datePublished = row.date(forColumn: DatabaseKey.datePublished)
 			let dateModified = row.date(forColumn: DatabaseKey.dateModified)
 
-			return DatabaseArticle(articleID: articleID, feedID: feedID, uniqueID: uniqueID, title: title, contentHTML: contentHTML, contentText: contentText, url: url, externalURL: externalURL, summary: summary, imageURL: imageURL, bannerImageURL: bannerImageURL, datePublished: datePublished, dateModified: dateModified, status: status)
+			let databaseArticle = DatabaseArticle(articleID: articleID, feedID: feedID, uniqueID: uniqueID, title: title, contentHTML: contentHTML, contentText: contentText, url: url, externalURL: externalURL, summary: summary, imageURL: imageURL, bannerImageURL: bannerImageURL, datePublished: datePublished, dateModified: dateModified, status: status)
+			databaseArticlesCache[articleID] = databaseArticle
+			return databaseArticle
 		}
 
 		return articles
@@ -663,6 +678,7 @@ private extension ArticlesTable {
 	
 
 	func saveUpdatedArticles(_ updatedArticles: Set<Article>, _ fetchedArticles: [String: Article], _ database: FMDatabase) {
+		removeArticlesFromDatabaseArticlesCache(updatedArticles)
 		saveUpdatedRelatedObjects(updatedArticles, fetchedArticles, database)
 		
 		for updatedArticle in updatedArticles {
@@ -683,10 +699,17 @@ private extension ArticlesTable {
 			// Not unexpected. There may be no changes.
 			return
 		}
-		
+
 		updateRowsWithDictionary(changesDictionary, whereKey: DatabaseKey.articleID, matches: updatedArticle.articleID, database: database)
 	}
-	
+
+	func removeArticlesFromDatabaseArticlesCache(_ updatedArticles: Set<Article>) {
+		let articleIDs = updatedArticles.articleIDs()
+		for articleID in articleIDs {
+			databaseArticlesCache[articleID] = nil
+		}
+	}
+
 	func statusIndicatesArticleIsIgnorable(_ status: ArticleStatus) -> Bool {
 		// Ignorable articles: either userDeleted==1 or (not starred and arrival date > 4 months).
 		if status.userDeleted {

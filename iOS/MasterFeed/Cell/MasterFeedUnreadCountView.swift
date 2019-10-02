@@ -10,18 +10,25 @@ import UIKit
 
 class MasterFeedUnreadCountView : UIView {
 	
-	private let padding = UIEdgeInsets(top: 1.0, left: 7.0, bottom: 1.0, right: 7.0)
-	private let cornerRadius = 8.0
-	private let bgColor = UIColor.darkGray
-	private let textColor = UIColor.white
-	private var textAttributes: [NSAttributedString.Key: AnyObject] {
+	var padding: UIEdgeInsets {
+		return UIEdgeInsets(top: 1.0, left: 7.0, bottom: 1.0, right: 7.0)
+	}
+	
+	let cornerRadius = 8.0
+	let bgColor = UIColor.darkGray
+	var textColor: UIColor {
+		return UIColor.white
+	}
+	
+	var textAttributes: [NSAttributedString.Key: AnyObject] {
 		let textFont = UIFont.preferredFont(forTextStyle: .caption1)
 		return [NSAttributedString.Key.foregroundColor: textColor, NSAttributedString.Key.font: textFont, NSAttributedString.Key.kern: NSNull()]
 	}
-	private var textSizeCache = [Int: CGSize]()
+	var textSizeCache = [Int: CGSize]()
 
 	var unreadCount = 0 {
 		didSet {
+			contentSizeIsValid = false
 			invalidateIntrinsicContentSize()
 			setNeedsDisplay()
 		}
@@ -31,8 +38,8 @@ class MasterFeedUnreadCountView : UIView {
 		return unreadCount < 1 ? "" : "\(unreadCount)"
 	}
 
-	private var intrinsicContentSizeIsValid = false
-	private var _intrinsicContentSize = CGSize.zero
+	private var contentSizeIsValid = false
+	private var _contentSize = CGSize.zero
 
 	override init(frame: CGRect) {
 		super.init(frame: frame)
@@ -46,29 +53,30 @@ class MasterFeedUnreadCountView : UIView {
 	
 	override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
 		textSizeCache = [Int: CGSize]()
-		invalidateIntrinsicContentSize()
+		contentSizeIsValid = false
 		setNeedsDisplay()
 	}
 	
-	override var intrinsicContentSize: CGSize {
-		if !intrinsicContentSizeIsValid {
+	var contentSize: CGSize {
+		if !contentSizeIsValid {
 			var size = CGSize.zero
 			if unreadCount > 0 {
 				size = textSize()
 				size.width += (padding.left + padding.right)
 				size.height += (padding.top + padding.bottom)
 			}
-			_intrinsicContentSize = size
-			intrinsicContentSizeIsValid = true
+			_contentSize = size
+			contentSizeIsValid = true
 		}
-		return _intrinsicContentSize
+		return _contentSize
 	}
 	
-	override func invalidateIntrinsicContentSize() {
-		intrinsicContentSizeIsValid = false
+	// Prevent autolayout from messing around with our frame settings
+	override var intrinsicContentSize: CGSize {
+		return CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
 	}
 
-	private func textSize() -> CGSize {
+	func textSize() -> CGSize {
 
 		if unreadCount < 1 {
 			return CGSize.zero
@@ -87,7 +95,7 @@ class MasterFeedUnreadCountView : UIView {
 		
 	}
 
-	private func textRect() -> CGRect {
+	func textRect() -> CGRect {
 
 		let size = textSize()
 		var r = CGRect.zero

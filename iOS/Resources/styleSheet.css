@@ -8,7 +8,6 @@ body {
 	word-wrap: break-word;
 	word-break: break-word;
 	-webkit-hyphens: auto;
-	
 }
 
 a {
@@ -34,9 +33,10 @@ a:hover {
 
 :root {
 	color-scheme: light dark;
+	--link-color: #0655BE;
 	--header-table-border-color: rgba(0, 0, 0, 0.1);
 	--header-color: rgba(0, 0, 0, 0.3);
-	--header-link-color: rgba(0, 0, 0, 0.3);
+	--header-link-color: #086AEE;
 	--body-code-color: #666;
 	--system-message-color: #cbcbcb;
 	--feedlink-color: rgba(0, 0, 0, 0.6);
@@ -44,9 +44,10 @@ a:hover {
 
 @media(prefers-color-scheme: dark) {
 	:root {
+		--link-color: #5E9EF4;
 		--header-table-border-color: rgba(255, 255, 255, 0.1);
 		--header-color: #d2d2d2;
-		--header-link-color: #4490e2;
+		--header-link-color: #2D80F1;
 		--body-code-color: #b2b2b2;
 		--system-message-color: #5f5f5f
 	}
@@ -120,9 +121,29 @@ code, pre {
 pre  {
 	white-space: pre-wrap;
 }
-img, video {
+img, figure, video, iframe, div {
 	max-width: 100%;
-	height: auto;
+	height: auto !important;
+	margin: 0 auto;
+}
+
+figcaption {
+	font-size: 14px;
+	line-height: 1.3em;
+}
+
+.iframeWrap {
+	position: relative;
+	display: block;
+	padding-top: 56.25%;
+}
+
+.iframeWrap iframe {
+	position: absolute;
+	top: 0;
+	left: 0;
+	height: 100% !important;
+	width: 100% !important;
 }
 
 /*Block ads and junk*/
@@ -135,7 +156,6 @@ iframe[src*="plusone.google"] {
 
 a[href*=".ads."],
 a[href*="feedads"],
-a[href*="feedburner"],
 a[href*="doubleclick"],
 a[href*="//ads."],
 a[href*="api.tweetmeme"],
@@ -159,4 +179,139 @@ img[src*="feedburner"],
 img[src*="feedblitz"],
 img[src*="share-buttons"] {
 	display: none !important;
+}
+
+
+
+
+/* Newsfoot specific styles. Structural styles come first, theme styles second */
+.newsfoot-footnote-container {
+	position: relative;
+	display: inline-block;
+}
+.newsfoot-footnote-popover {
+	position: absolute;
+	display: block;
+	padding: 0em 1em;
+	margin: 1em;
+	left: calc(-1 * (50vw - 1em));
+	right: calc(-1 * (50vw - 1em));
+	top: 0.75em;
+	max-width: none;
+	border-radius: 0.3em;
+	box-sizing: border-box;
+}
+
+.newsfoot-footnote-popover-arrow {
+	content: '';
+	display: block;
+	width: 1em;
+	position: absolute;
+	top: -0.5em;
+	left: calc(50% - 0.5em);
+	height: 1em !important;
+	transform: rotate(45deg);
+	z-index:0;
+}
+.newsfoot-footnote-popover-inner {
+	border-radius: calc(0.3em - 1px);
+	padding: 1em;
+	position: relative;
+	z-index: 1;
+}
+
+.newsfoot-footnote-popover-inner :first-child {
+	margin-top: 0;
+}
+.newsfoot-footnote-popover-inner :last-child {
+	margin-bottom: 0;
+}
+
+.newsfoot-footnote-popover .reversefootnote,
+.newsfoot-footnote-popover .footnoteBackLink,
+.newsfoot-footnote-popover .footnote-return {
+	display: none;
+}
+
+sup[id^='fn'] {
+	vertical-align: baseline;
+}
+
+a.footnote,
+sup > a[href^='#fn'],
+sup > div > a[href^='#fn'] {
+	display: inline-block;
+	text-decoration: none;
+	padding: 0.05em 0.75em;
+	border-radius: 1em;
+	min-width: 1em;
+	text-align: center;
+	font-size: 0.8em;
+	line-height: 1em;
+	position:relative;
+	top: -0.1em;
+}
+
+/* light / default */
+.newsfoot-footnote-popover {
+	background: #ccc;
+	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5), 0 3px 6px rgba(0, 0, 0, 0.25);
+	color: black;
+	padding: 1px;
+}
+.newsfoot-footnote-popover-arrow {
+	background: #fafafa;
+	border: 1px solid #ccc;
+}
+.newsfoot-footnote-popover-inner {
+	background: #fafafa;
+}
+body a.footnote,
+body a.footnote:visited,
+.newsfoot-footnote-popover + a.footnote:hover,
+sup > a[href^='#fn'],
+sup > div > a[href^='#fn'] {
+	background: #aaa;
+	color: white;
+	transition: background-color 200ms ease-out;
+}
+a.footnote:hover,
+.newsfoot-footnote-popover + a.footnote,
+sup > a[href^='#fn']:hover,
+sup > div > a[href^='#fn']:hover {
+	background: #666;
+	transition: background-color 200ms ease-out;
+}
+
+
+/* dark */
+@media screen and (prefers-color-scheme: dark) {
+	.newsfoot-footnote-popover {
+		background: #444;
+		color: rgb(224, 224, 224);
+	}
+	.newsfoot-footnote-popover-arrow {
+		background: #242424;
+		border: 1px solid #444;
+	}
+	.newsfoot-footnote-popover-inner {
+		background: #242424;
+	}
+	body a.footnote,
+	body a.footnote:visited,
+	.newsfoot-footnote-popover + a.footnote:hover,
+	sup > a[href^='#fn'],
+	sup > div > a[href^='#fn'] {
+		background: #aaa;
+		color: white;
+		transition: background-color 200ms ease-out;
+	}
+	a.footnote:hover,
+	.newsfoot-footnote-popover + a.footnote,
+	sup > a[href^='#fn']:hover,
+	sup > div > a[href^='#fn']:hover {
+		background: #666;
+		transition: background-color 200ms ease-out;
+	}
+
 }

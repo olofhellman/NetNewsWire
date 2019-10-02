@@ -24,9 +24,7 @@ final class FeedbinAccountDelegate: AccountDelegate {
 	private let caller: FeedbinAPICaller
 	private var log = OSLog(subsystem: Bundle.main.bundleIdentifier!, category: "Feedbin")
 
-	let isSubfoldersSupported = false
-	let isTagBasedSystem = true
-	let isOPMLImportSupported = true
+	let behaviors: AccountBehaviors = [.disallowFeedCopyInRootFolder]
 	let server: String? = "api.feedbin.com"
 	var isOPMLImportInProgress = false
 	
@@ -83,9 +81,9 @@ final class FeedbinAccountDelegate: AccountDelegate {
 			switch result {
 			case .success():
 				
-				self.refreshArticles(account) {
-					self.sendArticleStatus(for: account) {
-						self.refreshArticleStatus(for: account) {
+				self.sendArticleStatus(for: account) {
+					self.refreshArticleStatus(for: account) {
+						self.refreshArticles(account) {
 							self.refreshMissingArticles(account) {
 								self.refreshProgress.clear()
 								DispatchQueue.main.async {
@@ -278,6 +276,7 @@ final class FeedbinAccountDelegate: AccountDelegate {
 		// Feedbin uses tags and if at least one feed isn't tagged, then the folder doesn't exist on their system
 		guard folder.hasAtLeastOneFeed() else {
 			account.removeFolder(folder)
+			completion(.success(()))
 			return
 		}
 		
@@ -524,8 +523,7 @@ final class FeedbinAccountDelegate: AccountDelegate {
 	}
 	
 	func accountDidInitialize(_ account: Account) {
-		credentials = try? account.retrieveCredentials()
-		accountMetadata = account.metadata
+		credentials = try? account.retrieveCredentials(type: .basic)
 	}
 	
 	static func validateCredentials(transport: Transport, credentials: Credentials, endpoint: URL? = nil, completion: @escaping (Result<Credentials?, Error>) -> Void) {
@@ -545,23 +543,6 @@ final class FeedbinAccountDelegate: AccountDelegate {
 // MARK: Private
 
 private extension FeedbinAccountDelegate {
-	
-	func refreshAccount(_ account: Account, completion: @escaping (Result<Void, Error>) -> Void) {
-		
-		caller.retrieveTags { result in
-			switch result {
-			case .success(let tags):
-				BatchUpdate.shared.perform {
-					self.syncFolders(account, tags)
-				}
-				self.refreshProgress.completeTask()
-				self.refreshFeeds(account, completion: completion)
-			case .failure(let error):
-				completion(.failure(error))
-			}
-		}
-		
-	}
 	
 	func checkImportResult(opmlImportResultID: Int, completion: @escaping (Result<Void, Error>) -> Void) {
 		
@@ -598,6 +579,88 @@ private extension FeedbinAccountDelegate {
 			
 		}
 		
+	}
+	
+	func refreshAccount(_ account: Account, completion: @escaping (Result<Void, Error>) -> Void) {
+		
+		caller.retrieveTags { result in
+			switch result {
+			case .success(let tags):
+				
+				self.refreshProgress.completeTask()
+				self.caller.retrieveSubscriptions { result in
+					switch result {
+					case .success(let subscriptions):
+						
+						self.refreshProgress.completeTask()
+						self.forceExpireFolderFeedRelationship(account, tags)
+						self.caller.retrieveTaggings { result in
+							switch result {
+							case .success(let taggings):
+								
+								self.refreshProgress.completeTask()
+								self.caller.retrieveIcons { result in
+									switch result {
+									case .success(let icons):
+
+										BatchUpdate.shared.perform {
+											self.syncFolders(account, tags)
+											self.syncFeeds(account, subscriptions)
+											self.syncFeedFolderRelationship(account, taggings)
+											self.syncFavicons(account, icons)
+										}
+
+										self.refreshProgress.completeTask()
+										completion(.success(()))
+										
+									case .failure(let error):
+										completion(.failure(error))
+									}
+									
+								}
+								
+							case .failure(let error):
+								completion(.failure(error))
+							}
+							
+						}
+						
+					case .failure(let error):
+						completion(.failure(error))
+					}
+			
+				}
+					
+			case .failure(let error):
+				completion(.failure(error))
+			}
+				
+		}
+		
+	}
+
+	// This function can be deleted if Feedbin updates their taggings.json service to
+	// show a change when a tag is renamed.
+	func forceExpireFolderFeedRelationship(_ account: Account, _ tags: [FeedbinTag]?) {
+		guard let tags = tags else { return }
+
+		let folderNames: [String] =  {
+			if let folders = account.folders {
+				return folders.map { $0.name ?? "" }
+			} else {
+				return [String]()
+			}
+		}()
+
+		// Feedbin has a tag that we don't have a folder for.  We might not get a new
+		// taggings response for it if it is a folder rename.  Force expire the tagging
+		// so that we will for sure get the new tagging information.
+		tags.forEach { tag in
+			if !folderNames.contains(tag.name) {
+				accountMetadata?.conditionalGetInfo[FeedbinAPICaller.ConditionalGetKeys.taggings] = nil
+			}
+		}
+
 	}
 	
 	func syncFolders(_ account: Account, _ tags: [FeedbinTag]?) {
@@ -638,51 +701,6 @@ private extension FeedbinAccountDelegate {
 		
 	}
 	
-	func refreshFeeds(_ account: Account, completion: @escaping (Result<Void, Error>) -> Void) {
-		
-		caller.retrieveSubscriptions { result in
-			switch result {
-			case .success(let subscriptions):
-				
-				self.refreshProgress.completeTask()
-				self.caller.retrieveTaggings { result in
-					switch result {
-					case .success(let taggings):
-						
-						self.refreshProgress.completeTask()
-						self.caller.retrieveIcons { result in
-							switch result {
-							case .success(let icons):
-
-								BatchUpdate.shared.perform {
-									self.syncFeeds(account, subscriptions)
-									self.syncTaggings(account, taggings)
-									self.syncFavicons(account, icons)
-								}
-
-								self.refreshProgress.completeTask()
-								completion(.success(()))
-								
-							case .failure(let error):
-								completion(.failure(error))
-							}
-							
-						}
-						
-					case .failure(let error):
-						completion(.failure(error))
-					}
-					
-				}
-				
-			case .failure(let error):
-				completion(.failure(error))
-			}
-			
-		}
-		
-	}
-
 	func syncFeeds(_ account: Account, _ subscriptions: [FeedbinSubscription]?) {
 		
 		guard let subscriptions = subscriptions else { return }
@@ -714,7 +732,7 @@ private extension FeedbinAccountDelegate {
 			
 			let subFeedId = String(subscription.feedID)
 			
-			if let feed = account.idToFeedDictionary[subFeedId] {
+			if let feed = account.existingFeed(withFeedID: subFeedId) {
 				feed.name = subscription.name
 				// If the name has been changed on the server remove the locally edited name
 				feed.editedName = nil
@@ -728,7 +746,7 @@ private extension FeedbinAccountDelegate {
 		}
 	}
 
-	func syncTaggings(_ account: Account, _ taggings: [FeedbinTagging]?) {
+	func syncFeedFolderRelationship(_ account: Account, _ taggings: [FeedbinTagging]?) {
 		
 		guard let taggings = taggings else { return }
 		assert(Thread.isMainThread)
@@ -777,7 +795,7 @@ private extension FeedbinAccountDelegate {
 			for tagging in groupedTaggings {
 				let taggingFeedID = String(tagging.feedID)
 				if !folderFeedIds.contains(taggingFeedID) {
-					guard let feed = account.idToFeedDictionary[taggingFeedID] else {
+					guard let feed = account.existingFeed(withFeedID: taggingFeedID) else {
 						continue
 					}
 					saveFolderRelationship(for: feed, withFolderName: folderName, id: String(tagging.taggingID))
@@ -948,8 +966,8 @@ private extension FeedbinAccountDelegate {
 			case .success(let (entries, page)):
 				
 				self.processEntries(account: account, entries: entries) {
-					self.refreshArticles(account, page: page) {
-						self.refreshArticleStatus(for: account) {
+					self.refreshArticleStatus(for: account) {
+						self.refreshArticles(account, page: page) {
 							self.refreshProgress.completeTask()
 							self.refreshMissingArticles(account) {
 								self.refreshProgress.completeTask()
@@ -1005,24 +1023,24 @@ private extension FeedbinAccountDelegate {
 		os_log(.debug, log: log, "Refreshing missing articles...")
 		let group = DispatchGroup()
 
-		account.fetchArticleIDsForStatusesWithoutArticles { (fetchedArticleIDs) in
-			let articleIDs = Array(fetchedArticleIDs)
-			let chunkedArticleIDs = articleIDs.chunked(into: 100)
-			for chunk in chunkedArticleIDs {
-				group.enter()
-				self.caller.retrieveEntries(articleIDs: chunk) { result in
+		let fetchedArticleIDs = account.fetchArticleIDsForStatusesWithoutArticles()
+		let articleIDs = Array(fetchedArticleIDs)
+		let chunkedArticleIDs = articleIDs.chunked(into: 100)
 
-					switch result {
-					case .success(let entries):
+		for chunk in chunkedArticleIDs {
+			group.enter()
+			self.caller.retrieveEntries(articleIDs: chunk) { result in
 
-						self.processEntries(account: account, entries: entries) {
-							group.leave()
-						}
+				switch result {
+				case .success(let entries):
 
-					case .failure(let error):
-						os_log(.error, log: self.log, "Refresh missing articles failed: %@.", error.localizedDescription)
+					self.processEntries(account: account, entries: entries) {
 						group.leave()
 					}
+
+				case .failure(let error):
+					os_log(.error, log: self.log, "Refresh missing articles failed: %@.", error.localizedDescription)
+					group.leave()
 				}
 			}
 		}
@@ -1071,7 +1089,7 @@ private extension FeedbinAccountDelegate {
 			
 			group.enter()
 			
-			if let feed = account.idToFeedDictionary[feedID] {
+			if let feed = account.existingFeed(withFeedID: feedID) {
 				DispatchQueue.main.async {
 					account.update(feed, parsedItems: Set(mapItems), defaultRead: true) {
 						group.leave()
@@ -1097,7 +1115,7 @@ private extension FeedbinAccountDelegate {
 		
 		let parsedItems: [ParsedItem] = entries.map { entry in
 			let authors = Set([ParsedAuthor(name: entry.authorName, url: entry.jsonFeed?.jsonFeedAuthor?.url, avatarURL: entry.jsonFeed?.jsonFeedAuthor?.avatarURL, emailAddress: nil)])
-			return ParsedItem(syncServiceID: String(entry.articleID), uniqueID: String(entry.articleID), feedURL: String(entry.feedID), url: nil, externalURL: entry.url, title: entry.title, contentHTML: entry.contentHTML, contentText: nil, summary: entry.summary, imageURL: nil, bannerImageURL: nil, datePublished: entry.parseDatePublished(), dateModified: nil, authors: authors, tags: nil, attachments: nil)
+			return ParsedItem(syncServiceID: String(entry.articleID), uniqueID: String(entry.articleID), feedURL: String(entry.feedID), url: nil, externalURL: entry.url, title: entry.title, contentHTML: entry.contentHTML, contentText: nil, summary: entry.summary, imageURL: nil, bannerImageURL: nil, datePublished: entry.parsedDatePublished, dateModified: nil, authors: authors, tags: nil, attachments: nil)
 		}
 		
 		return Set(parsedItems)
@@ -1110,29 +1128,28 @@ private extension FeedbinAccountDelegate {
 		}
 
 		let feedbinUnreadArticleIDs = Set(articleIDs.map { String($0) } )
-		account.fetchUnreadArticleIDs { (currentUnreadArticleIDs) in
-			// Mark articles as unread
-			let deltaUnreadArticleIDs = feedbinUnreadArticleIDs.subtracting(currentUnreadArticleIDs)
-			account.fetchArticlesAsync(.articleIDs(deltaUnreadArticleIDs)) { (markUnreadArticles) in
-				account.update(markUnreadArticles, statusKey: .read, flag: false)
+		let currentUnreadArticleIDs = account.fetchUnreadArticleIDs()
+		
+		// Mark articles as unread
+		let deltaUnreadArticleIDs = feedbinUnreadArticleIDs.subtracting(currentUnreadArticleIDs)
+		let markUnreadArticles = account.fetchArticles(.articleIDs(deltaUnreadArticleIDs))
+		account.update(markUnreadArticles, statusKey: .read, flag: false)
 
-				// Save any unread statuses for articles we haven't yet received
-				let markUnreadArticleIDs = Set(markUnreadArticles.map { $0.articleID })
-				let missingUnreadArticleIDs = deltaUnreadArticleIDs.subtracting(markUnreadArticleIDs)
-				account.ensureStatuses(missingUnreadArticleIDs, .read, false)
-			}
+		// Save any unread statuses for articles we haven't yet received
+		let markUnreadArticleIDs = Set(markUnreadArticles.map { $0.articleID })
+		let missingUnreadArticleIDs = deltaUnreadArticleIDs.subtracting(markUnreadArticleIDs)
+		account.ensureStatuses(missingUnreadArticleIDs, true, .read, false)
 
-			// Mark articles as read
-			let deltaReadArticleIDs = currentUnreadArticleIDs.subtracting(feedbinUnreadArticleIDs)
-			account.fetchArticlesAsync(.articleIDs(deltaReadArticleIDs)) { (markReadArticles) in
-				account.update(markReadArticles, statusKey: .read, flag: true)
+		// Mark articles as read
+		let deltaReadArticleIDs = currentUnreadArticleIDs.subtracting(feedbinUnreadArticleIDs)
+		let markReadArticles = account.fetchArticles(.articleIDs(deltaReadArticleIDs))
+		account.update(markReadArticles, statusKey: .read, flag: true)
 
-				// Save any read statuses for articles we haven't yet received
-				let markReadArticleIDs = Set(markReadArticles.map { $0.articleID })
-				let missingReadArticleIDs = deltaReadArticleIDs.subtracting(markReadArticleIDs)
-				account.ensureStatuses(missingReadArticleIDs, .read, true)
-			}
-		}
+		// Save any read statuses for articles we haven't yet received
+		let markReadArticleIDs = Set(markReadArticles.map { $0.articleID })
+		let missingReadArticleIDs = deltaReadArticleIDs.subtracting(markReadArticleIDs)
+		account.ensureStatuses(missingReadArticleIDs, true, .read, true)
+
 	}
 	
 	func syncArticleStarredState(account: Account, articleIDs: [Int]?) {
@@ -1141,29 +1158,27 @@ private extension FeedbinAccountDelegate {
 		}
 
 		let feedbinStarredArticleIDs = Set(articleIDs.map { String($0) } )
-		account.fetchStarredArticleIDs { (currentStarredArticleIDs) in
-			// Mark articles as starred
-			let deltaStarredArticleIDs = feedbinStarredArticleIDs.subtracting(currentStarredArticleIDs)
-			account.fetchArticlesAsync(.articleIDs(deltaStarredArticleIDs)) { (markStarredArticles) in
-				account.update(markStarredArticles, statusKey: .starred, flag: true)
+		let currentStarredArticleIDs = account.fetchStarredArticleIDs()
+		
+		// Mark articles as starred
+		let deltaStarredArticleIDs = feedbinStarredArticleIDs.subtracting(currentStarredArticleIDs)
+		let markStarredArticles = account.fetchArticles(.articleIDs(deltaStarredArticleIDs))
+		account.update(markStarredArticles, statusKey: .starred, flag: true)
 
-				// Save any starred statuses for articles we haven't yet received
-				let markStarredArticleIDs = Set(markStarredArticles.map { $0.articleID })
-				let missingStarredArticleIDs = deltaStarredArticleIDs.subtracting(markStarredArticleIDs)
-				account.ensureStatuses(missingStarredArticleIDs, .starred, true)
-			}
+		// Save any starred statuses for articles we haven't yet received
+		let markStarredArticleIDs = Set(markStarredArticles.map { $0.articleID })
+		let missingStarredArticleIDs = deltaStarredArticleIDs.subtracting(markStarredArticleIDs)
+		account.ensureStatuses(missingStarredArticleIDs, true, .starred, true)
 
-			// Mark articles as unstarred
-			let deltaUnstarredArticleIDs = currentStarredArticleIDs.subtracting(feedbinStarredArticleIDs)
-			account.fetchArticlesAsync(.articleIDs(deltaUnstarredArticleIDs)) { (markUnstarredArticles) in
-				account.update(markUnstarredArticles, statusKey: .starred, flag: false)
+		// Mark articles as unstarred
+		let deltaUnstarredArticleIDs = currentStarredArticleIDs.subtracting(feedbinStarredArticleIDs)
+		let markUnstarredArticles = account.fetchArticles(.articleIDs(deltaUnstarredArticleIDs))
+		account.update(markUnstarredArticles, statusKey: .starred, flag: false)
 
-				// Save any unstarred statuses for articles we haven't yet received
-				let markUnstarredArticleIDs = Set(markUnstarredArticles.map { $0.articleID })
-				let missingUnstarredArticleIDs = deltaUnstarredArticleIDs.subtracting(markUnstarredArticleIDs)
-				account.ensureStatuses(missingUnstarredArticleIDs, .starred, false)
-			}
-		}
+		// Save any unstarred statuses for articles we haven't yet received
+		let markUnstarredArticleIDs = Set(markUnstarredArticles.map { $0.articleID })
+		let missingUnstarredArticleIDs = deltaUnstarredArticleIDs.subtracting(markUnstarredArticleIDs)
+		account.ensureStatuses(missingUnstarredArticleIDs, true, .starred, false)
 	}
 
 	func deleteTagging(for account: Account, with feed: Feed, from container: Container?, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -1231,7 +1246,7 @@ private extension FeedbinAccountDelegate {
 
 	func retrieveCredentialsIfNecessary(_ account: Account) {
 		if credentials == nil {
-			credentials = try? account.retrieveCredentials()
+			credentials = try? account.retrieveCredentials(type: .basic)
 		}
 	}
 	

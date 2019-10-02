@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>5.0b1</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -33,7 +33,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>522</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.news</string>
 	<key>LSMinimumSystemVersion</key>
@@ -44,7 +44,7 @@
 		<true/>
 	</dict>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>NetNewsWire communicates with other apps on your Mac when you choose to share a news item.</string>
+	<string>NetNewsWire communicates with other apps on your Mac when you choose to share an article.</string>
 	<key>NSAppleScriptEnabled</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
@@ -56,6 +56,8 @@
 	<key>OSAScriptingDefinition</key>
 	<string>NetNewsWire.sdef</string>
 	<key>SUFeedURL</key>
+	<string>https://ranchero.com/downloads/netnewswire-release.xml</string>
+	<key>FeedURLForTestBuilds</key>
 	<string>https://ranchero.com/downloads/netnewswire-beta.xml</string>
 	<key>UserAgent</key>
 	<string>NetNewsWire (RSS Reader; https://ranchero.com/netnewswire/)</string>

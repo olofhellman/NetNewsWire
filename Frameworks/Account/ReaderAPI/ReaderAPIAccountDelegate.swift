@@ -25,8 +25,7 @@ final class ReaderAPIAccountDelegate: AccountDelegate {
 	private let caller: ReaderAPICaller
 	private var log = OSLog(subsystem: Bundle.main.bundleIdentifier!, category: "ReaderAPI")
 
-	let isSubfoldersSupported = false
-	let isTagBasedSystem = true
+	var behaviors: AccountBehaviors = [.disallowFeedInRootFolder, .disallowOPMLImports]
 
 	var server: String? {
 		get {
@@ -34,7 +33,6 @@ final class ReaderAPIAccountDelegate: AccountDelegate {
 		}
 	}
 	
-	let isOPMLImportSupported = false
 	var isOPMLImportInProgress = false
 	
 	var credentials: Credentials? {
@@ -88,12 +86,15 @@ final class ReaderAPIAccountDelegate: AccountDelegate {
 		refreshAccount(account) { result in
 			switch result {
 			case .success():
-				self.refreshArticles(account) {
+				
+				self.sendArticleStatus(for: account) {
 					self.refreshArticleStatus(for: account) {
-						self.refreshMissingArticles(account) {
-							self.refreshProgress.clear()
-							DispatchQueue.main.async {
-								completion(.success(()))
+						self.refreshArticles(account) {
+							self.refreshMissingArticles(account) {
+								self.refreshProgress.clear()
+								DispatchQueue.main.async {
+									completion(.success(()))
+								}
 							}
 						}
 					}
@@ -410,8 +411,7 @@ final class ReaderAPIAccountDelegate: AccountDelegate {
 	}
 	
 	func accountDidInitialize(_ account: Account) {
-		accountMetadata = account.metadata
-		credentials = try? account.retrieveCredentials()
+		credentials = try? account.retrieveCredentials(type: .readerAPIKey)
 	}
 	
 	static func validateCredentials(transport: Transport, credentials: Credentials, endpoint: URL?, completion: @escaping (Result<Credentials?, Error>) -> Void) {
@@ -546,7 +546,7 @@ private extension ReaderAPIAccountDelegate {
 		subscriptions.forEach { subscription in
 			
 			let subFeedId = String(subscription.feedID)
-			if let feed = account.idToFeedDictionary[subFeedId] {
+			if let feed = account.existingFeed(withFeedID: subFeedId) {
 				feed.name = subscription.name
 				feed.homePageURL = subscription.homePageURL
 			} else {
@@ -616,8 +616,7 @@ private extension ReaderAPIAccountDelegate {
 			for subscription in groupedTaggings {
 				let taggingFeedID = String(subscription.feedID)
 				if !folderFeedIds.contains(taggingFeedID) {
-					let idDictionary = account.idToFeedDictionary
-					guard let feed = idDictionary[taggingFeedID] else {
+					guard let feed = account.existingFeed(withFeedID: taggingFeedID) else {
 						continue
 					}
 					saveFolderRelationship(for: feed, withFolderName: folderName, id: String(subscription.feedID))
@@ -756,8 +755,8 @@ private extension ReaderAPIAccountDelegate {
 			case .success(let (entries, page)):
 				
 				self.processEntries(account: account, entries: entries) {
-					self.refreshArticles(account, page: page) {
-						self.refreshArticleStatus(for: account) {
+					self.refreshArticleStatus(for: account) {
+						self.refreshArticles(account, page: page) {
 							self.refreshMissingArticles(account) {
 								DispatchQueue.main.async {
 									completion(.success(feed))
@@ -812,24 +811,23 @@ private extension ReaderAPIAccountDelegate {
 		os_log(.debug, log: log, "Refreshing missing articles...")
 		let group = DispatchGroup()
 
-		account.fetchArticleIDsForStatusesWithoutArticles { (fetchedArticleIDs) in
-			let articleIDs = Array(fetchedArticleIDs)
-			let chunkedArticleIDs = articleIDs.chunked(into: 100)
+		let fetchedArticleIDs = account.fetchArticleIDsForStatusesWithoutArticles()
+		let articleIDs = Array(fetchedArticleIDs)
+		let chunkedArticleIDs = articleIDs.chunked(into: 100)
 
-			for chunk in chunkedArticleIDs {
-				group.enter()
-				self.caller.retrieveEntries(articleIDs: chunk) { result in
+		for chunk in chunkedArticleIDs {
+			group.enter()
+			self.caller.retrieveEntries(articleIDs: chunk) { result in
 
-					switch result {
-					case .success(let entries):
-						self.processEntries(account: account, entries: entries) {
-							group.leave()
-						}
-
-					case .failure(let error):
-						os_log(.error, log: self.log, "Refresh missing articles failed: %@.", error.localizedDescription)
+				switch result {
+				case .success(let entries):
+					self.processEntries(account: account, entries: entries) {
 						group.leave()
 					}
+
+				case .failure(let error):
+					os_log(.error, log: self.log, "Refresh missing articles failed: %@.", error.localizedDescription)
+					group.leave()
 				}
 			}
 		}
@@ -878,7 +876,7 @@ private extension ReaderAPIAccountDelegate {
 			
 			group.enter()
 			
-			if let feed = account.idToFeedDictionary[feedID] {
+			if let feed = account.existingFeed(withFeedID: feedID) {
 				DispatchQueue.main.async {
 					account.update(feed, parsedItems: Set(mapItems), defaultRead: true) {
 						group.leave()
@@ -918,63 +916,61 @@ private extension ReaderAPIAccountDelegate {
 			return
 		}
 
-		let unreadArticleIDs = Set(articleIDs.map { String($0) } )
-		account.fetchUnreadArticleIDs { (currentUnreadArticleIDs) in
-			// Mark articles as unread
-			let deltaUnreadArticleIDs = unreadArticleIDs.subtracting(currentUnreadArticleIDs)
-			account.fetchArticlesAsync(.articleIDs(deltaUnreadArticleIDs)) { (markUnreadArticles) in
-				account.update(markUnreadArticles, statusKey: .read, flag: false)
+		let feedbinUnreadArticleIDs = Set(articleIDs.map { String($0) } )
+		let currentUnreadArticleIDs = account.fetchUnreadArticleIDs()
+		
+		// Mark articles as unread
+		let deltaUnreadArticleIDs = feedbinUnreadArticleIDs.subtracting(currentUnreadArticleIDs)
+		let markUnreadArticles = account.fetchArticles(.articleIDs(deltaUnreadArticleIDs))
+		account.update(markUnreadArticles, statusKey: .read, flag: false)
 
-				// Save any unread statuses for articles we haven't yet received
-				let markUnreadArticleIDs = Set(markUnreadArticles.map { $0.articleID })
-				let missingUnreadArticleIDs = deltaUnreadArticleIDs.subtracting(markUnreadArticleIDs)
-				account.ensureStatuses(missingUnreadArticleIDs, .read, false)
-			}
+		// Save any unread statuses for articles we haven't yet received
+		let markUnreadArticleIDs = Set(markUnreadArticles.map { $0.articleID })
+		let missingUnreadArticleIDs = deltaUnreadArticleIDs.subtracting(markUnreadArticleIDs)
+		account.ensureStatuses(missingUnreadArticleIDs, true, .read, false)
 
-			// Mark articles as read
-			let deltaReadArticleIDs = currentUnreadArticleIDs.subtracting(unreadArticleIDs)
-			account.fetchArticlesAsync(.articleIDs(deltaReadArticleIDs)) { (markReadArticles) in
-				account.update(markReadArticles, statusKey: .read, flag: true)
+		// Mark articles as read
+		let deltaReadArticleIDs = currentUnreadArticleIDs.subtracting(feedbinUnreadArticleIDs)
+		let markReadArticles = account.fetchArticles(.articleIDs(deltaReadArticleIDs))
+		account.update(markReadArticles, statusKey: .read, flag: true)
 
-				// Save any read statuses for articles we haven't yet received
-				let markReadArticleIDs = Set(markReadArticles.map { $0.articleID })
-				let missingReadArticleIDs = deltaReadArticleIDs.subtracting(markReadArticleIDs)
-				account.ensureStatuses(missingReadArticleIDs, .read, true)
-			}
-		}
+		// Save any read statuses for articles we haven't yet received
+		let markReadArticleIDs = Set(markReadArticles.map { $0.articleID })
+		let missingReadArticleIDs = deltaReadArticleIDs.subtracting(markReadArticleIDs)
+		account.ensureStatuses(missingReadArticleIDs, true, .read, true)
+
 	}
 	
 	func syncArticleStarredState(account: Account, articleIDs: [Int]?) {
-		
 		guard let articleIDs = articleIDs else {
 			return
 		}
 
-		let starredArticleIDs = Set(articleIDs.map { String($0) } )
-		account.fetchStarredArticleIDs { (currentStarredArticleIDs) in
-			// Mark articles as starred
-			let deltaStarredArticleIDs = starredArticleIDs.subtracting(currentStarredArticleIDs)
-			account.fetchArticlesAsync(.articleIDs(deltaStarredArticleIDs)) { (markStarredArticles) in
-				account.update(markStarredArticles, statusKey: .starred, flag: true)
+		let feedbinStarredArticleIDs = Set(articleIDs.map { String($0) } )
+		let currentStarredArticleIDs = account.fetchStarredArticleIDs()
+		
+		// Mark articles as starred
+		let deltaStarredArticleIDs = feedbinStarredArticleIDs.subtracting(currentStarredArticleIDs)
+		let markStarredArticles = account.fetchArticles(.articleIDs(deltaStarredArticleIDs))
+		account.update(markStarredArticles, statusKey: .starred, flag: true)
 
-				// Save any starred statuses for articles we haven't yet received
-				let markStarredArticleIDs = Set(markStarredArticles.map { $0.articleID })
-				let missingStarredArticleIDs = deltaStarredArticleIDs.subtracting(markStarredArticleIDs)
-				account.ensureStatuses(missingStarredArticleIDs, .starred, true)
-			}
+		// Save any starred statuses for articles we haven't yet received
+		let markStarredArticleIDs = Set(markStarredArticles.map { $0.articleID })
+		let missingStarredArticleIDs = deltaStarredArticleIDs.subtracting(markStarredArticleIDs)
+		account.ensureStatuses(missingStarredArticleIDs, true, .starred, true)
 
-			// Mark articles as unstarred
-			let deltaUnstarredArticleIDs = currentStarredArticleIDs.subtracting(starredArticleIDs)
-			account.fetchArticlesAsync(.articleIDs(deltaUnstarredArticleIDs)) { (markUnstarredArticles) in
-				account.update(markUnstarredArticles, statusKey: .starred, flag: false)
+		// Mark articles as unstarred
+		let deltaUnstarredArticleIDs = currentStarredArticleIDs.subtracting(feedbinStarredArticleIDs)
+		let markUnstarredArticles = account.fetchArticles(.articleIDs(deltaUnstarredArticleIDs))
+		account.update(markUnstarredArticles, statusKey: .starred, flag: false)
 
-				// Save any unstarred statuses for articles we haven't yet received
-				let markUnstarredArticleIDs = Set(markUnstarredArticles.map { $0.articleID })
-				let missingUnstarredArticleIDs = deltaUnstarredArticleIDs.subtracting(markUnstarredArticleIDs)
-				account.ensureStatuses(missingUnstarredArticleIDs, .starred, false)
-			}
-		}
+		// Save any unstarred statuses for articles we haven't yet received
+		let markUnstarredArticleIDs = Set(markUnstarredArticles.map { $0.articleID })
+		let missingUnstarredArticleIDs = deltaUnstarredArticleIDs.subtracting(markUnstarredArticleIDs)
+		account.ensureStatuses(missingUnstarredArticleIDs, true, .starred, false)
 	}
+
+
 
 	func deleteTagging(for account: Account, with feed: Feed, from container: Container?, completion: @escaping (Result<Void, Error>) -> Void) {
 		

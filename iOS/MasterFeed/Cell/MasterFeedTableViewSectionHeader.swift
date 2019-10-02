@@ -65,11 +65,25 @@ class MasterFeedTableViewSectionHeader: UITableViewHeaderFooterView {
 	
 	private let unreadCountView = MasterFeedUnreadCountView(frame: CGRect.zero)
 	private var disclosureView: UIImageView = {
-		let iView = UIImageView()
+		let iView = NonIntrinsicImageView()
+		iView.tintColor = UIColor.tertiaryLabel
+		iView.image = AppAssets.chevronSmallImage
 		iView.contentMode = .center
 		return iView
 	}()
 
+	private let topSeparatorView: UIView = {
+		let view = UIView()
+		view.backgroundColor = UIColor.separator
+		return view
+	}()
+	
+	private let bottomSeparatorView: UIView = {
+		let view = UIView()
+		view.backgroundColor = UIColor.separator
+		return view
+	}()
+	
 	override init(reuseIdentifier: String?) {
 		super.init(reuseIdentifier: reuseIdentifier)
 		commonInit()
@@ -92,7 +106,7 @@ class MasterFeedTableViewSectionHeader: UITableViewHeaderFooterView {
 		// cell below.
 		unreadCountView.unreadCount = 888
 		
-		let layout = MasterFeedTableViewCellLayout(cellWidth: size.width, insets: safeAreaInsets, shouldShowImage: false, label: titleView, unreadCountView: unreadCountView, showingEditingControl: false, indent: false, shouldShowDisclosure: true)
+		let layout = MasterFeedTableViewCellLayout(cellWidth: size.width, insets: safeAreaInsets, label: titleView, unreadCountView: unreadCountView, showingEditingControl: false, indent: false, shouldShowDisclosure: true)
 		
 		return CGSize(width: bounds.width, height: layout.height)
 		
@@ -100,7 +114,7 @@ class MasterFeedTableViewSectionHeader: UITableViewHeaderFooterView {
 
 	override func layoutSubviews() {
 		super.layoutSubviews()
-		let layout = MasterFeedTableViewCellLayout(cellWidth: bounds.size.width, insets: safeAreaInsets, shouldShowImage: false, label: titleView, unreadCountView: unreadCountView, showingEditingControl: false, indent: false, shouldShowDisclosure: true)
+		let layout = MasterFeedTableViewCellLayout(cellWidth: bounds.size.width, insets: safeAreaInsets, label: titleView, unreadCountView: unreadCountView, showingEditingControl: false, indent: false, shouldShowDisclosure: true)
 		layoutWith(layout)
 	}
 
@@ -114,13 +128,17 @@ private extension MasterFeedTableViewSectionHeader {
 		updateDisclosureImage()
 		addSubviewAtInit(disclosureView)
 		addBackgroundView()
+		addSubviewAtInit(topSeparatorView)
+		addSubviewAtInit(bottomSeparatorView)
 	}
 	
 	func updateDisclosureImage() {
-		if disclosureExpanded {
-			disclosureView.image = AppAssets.chevronDownImage
-		} else {
-			disclosureView.image = AppAssets.chevronRightImage
+		UIView.animate(withDuration: 0.3) {
+			if self.disclosureExpanded {
+				self.disclosureView.transform = CGAffineTransform(rotationAngle: 1.570796)
+			} else {
+				self.disclosureView.transform = CGAffineTransform(rotationAngle: 0)
+			}
 		}
 	}
 
@@ -133,6 +151,11 @@ private extension MasterFeedTableViewSectionHeader {
 		titleView.setFrameIfNotEqual(layout.titleRect)
 		unreadCountView.setFrameIfNotEqual(layout.unreadCountRect)
 		disclosureView.setFrameIfNotEqual(layout.disclosureButtonRect)
+		
+		let top = CGRect(x: safeAreaInsets.left, y: 0, width: frame.width - safeAreaInsets.right - safeAreaInsets.left, height: 0.5)
+		topSeparatorView.setFrameIfNotEqual(top)
+		let bottom = CGRect(x: safeAreaInsets.left, y: frame.height - 0.5, width: frame.width - safeAreaInsets.right - safeAreaInsets.left, height: 0.5)
+		bottomSeparatorView.setFrameIfNotEqual(bottom)
 	}
 	
 	func addBackgroundView() {

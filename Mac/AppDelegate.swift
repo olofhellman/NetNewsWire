@@ -41,8 +41,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserInterfaceValidations, 
 	@IBOutlet var debugMenuItem: NSMenuItem!
 	@IBOutlet var sortByOldestArticleOnTopMenuItem: NSMenuItem!
 	@IBOutlet var sortByNewestArticleOnTopMenuItem: NSMenuItem!
+	@IBOutlet var groupArticlesByFeedMenuItem: NSMenuItem!
 	@IBOutlet var checkForUpdatesMenuItem: NSMenuItem!
-	
+
 	var unreadCount = 0 {
 		didSet {
 			if unreadCount != oldValue {
@@ -63,11 +64,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserInterfaceValidations, 
 	private var crashReportWindowController: CrashReportWindowController? // For testing only
 	private let log = Log()
 	private let appNewsURLString = "https://nnw.ranchero.com/feed.json"
+	private let appMovementMonitor = RSAppMovementMonitor()
 
 	override init() {
 		NSWindow.allowsAutomaticWindowTabbing = false
 		super.init()
 
+		AccountManager.shared = AccountManager(accountsFolder: RSDataSubfolder(nil, "Accounts")!)
+		
 		NotificationCenter.default.addObserver(self, selector: #selector(unreadCountDidChange(_:)), name: .UnreadCountDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(inspectableObjectsDidChange(_:)), name: .InspectableObjectsDidChange, object: nil)
 
@@ -131,6 +135,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserInterfaceValidations, 
 		let bundleIdentifier = (Bundle.main.infoDictionary!["CFBundleIdentifier"]! as! String)
 		let cacheFolder = (tempDirectory as NSString).appendingPathComponent(bundleIdentifier)
 
+		// If the image disk cache hasn't been flushed for 3 days and the network is available, delete it
+		if let flushDate = AppDefaults.lastImageCacheFlushDate, flushDate.addingTimeInterval(3600*24*3) < Date() {
+			if let reachability = try? Reachability(hostname: "apple.com") {
+				if reachability.connection != .unavailable {
+					try? FileManager.default.removeItem(atPath: cacheFolder)
+					AppDefaults.lastImageCacheFlushDate = Date()
+				}
+			}
+		}
+		
 		let faviconsFolder = (cacheFolder as NSString).appendingPathComponent("Favicons")
 		let faviconsFolderURL = URL(fileURLWithPath: faviconsFolder)
 		try! FileManager.default.createDirectory(at: faviconsFolderURL, withIntermediateDirectories: true, attributes: nil)
@@ -142,10 +156,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserInterfaceValidations, 
 		imageDownloader = ImageDownloader(folder: imagesFolder)
 
 		authorAvatarDownloader = AuthorAvatarDownloader(imageDownloader: imageDownloader)
-		feedIconDownloader = FeedIconDownloader(imageDownloader: imageDownloader)
+		feedIconDownloader = FeedIconDownloader(imageDownloader: imageDownloader, folder: cacheFolder)
 
 		updateSortMenuItems()
+		updateGroupByFeedMenuItem()
         createAndShowMainWindow()
+		if isFirstRun {
+			mainWindowController?.window?.center()
+		}
 
 		NotificationCenter.default.addObserver(self, selector: #selector(feedSettingDidChange(_:)), name: .FeedSettingDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(userDefaultsDidChange(_:)), name: UserDefaults.didChangeNotification, object: nil)
@@ -253,7 +271,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserInterfaceValidations, 
 
 	@objc func userDefaultsDidChange(_ note: Notification) {
 		updateSortMenuItems()
+		updateGroupByFeedMenuItem()
 		refreshTimer?.update()
+		updateDockBadge()
 	}
 
 	// MARK: Main Window
@@ -294,6 +314,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserInterfaceValidations, 
 		if item.action == #selector(showAddFeedWindow(_:)) || item.action == #selector(showAddFolderWindow(_:)) {
 			return !isDisplayingSheet && !AccountManager.shared.activeAccounts.isEmpty
 		}
+		#if !MAC_APP_STORE
+		if item.action == #selector(toggleWebInspectorEnabled(_:)) {
+			(item as! NSMenuItem).state = AppDefaults.webInspectorEnabled ? .on : .off
+		}
+		#endif
 		return true
 	}
 
@@ -434,7 +459,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserInterfaceValidations, 
 	}
 
 	@IBAction func openSlackGroup(_ sender: Any?) {
-		Browser.open("https://join.slack.com/t/netnewswire/shared_invite/enQtNjM4MDA1MjQzMDkzLTNlNjBhOWVhYzdhYjA4ZWFhMzQ1MTUxYjU0NTE5ZGY0YzYwZWJhNjYwNTNmNTg2NjIwYWY4YzhlYzk5NmU3ZTc", inBackground: false)
+		Browser.open("https://ranchero.com/netnewswire/slack", inBackground: false)
 	}
 
 	@IBAction func openTechnotes(_ sender: Any?) {
@@ -502,6 +527,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserInterfaceValidations, 
 
 		AppDefaults.timelineSortDirection = .orderedDescending
 	}
+	
+	@IBAction func groupByFeedToggled(_ sender: NSMenuItem) {		
+		AppDefaults.timelineGroupByFeed.toggle()
+	}
+	
 }
 
 // MARK: - Debug Menu
@@ -509,6 +539,20 @@ extension AppDelegate {
 
 	@IBAction func debugSearch(_ sender: Any?) {
 		AccountManager.shared.defaultAccount.debugRunSearch()
+	}
+
+	@IBAction func toggleWebInspectorEnabled(_ sender: Any?) {
+		#if !MAC_APP_STORE
+			let newValue = !AppDefaults.webInspectorEnabled
+			AppDefaults.webInspectorEnabled = newValue
+
+			// An attached inspector can display incorrectly on certain setups (like mine); default to displaying in a separate window,
+			// and reset the default to a separate window when the preference is toggled off and on again in case the inspector is
+			// accidentally reattached.
+
+			AppDefaults.webInspectorStartsAttached = false
+			NotificationCenter.default.post(name: .WebInspectorEnabledDidChange, object: newValue)
+		#endif
 	}
 }
 
@@ -538,6 +582,11 @@ private extension AppDelegate {
 		let sortByNewestOnTop = AppDefaults.timelineSortDirection == .orderedDescending
 		sortByNewestArticleOnTopMenuItem.state = sortByNewestOnTop ? .on : .off
 		sortByOldestArticleOnTopMenuItem.state = sortByNewestOnTop ? .off : .on
+	}
+	
+	func updateGroupByFeedMenuItem() {
+		let groupByFeedEnabled = AppDefaults.timelineGroupByFeed
+		groupArticlesByFeedMenuItem.state = groupByFeedEnabled ? .on : .off
 	}
 }
 

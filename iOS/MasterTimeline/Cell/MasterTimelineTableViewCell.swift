@@ -9,7 +9,7 @@
 import UIKit
 import RSCore
 
-class MasterTimelineTableViewCell: UITableViewCell {
+class MasterTimelineTableViewCell: NNWTableViewCell {
 	
 	private let titleView = MasterTimelineTableViewCell.multiLineUILabel()
 	private let summaryView = MasterTimelineTableViewCell.multiLineUILabel()
@@ -17,11 +17,7 @@ class MasterTimelineTableViewCell: UITableViewCell {
 	private let dateView = MasterTimelineTableViewCell.singleLineUILabel()
 	private let feedNameView = MasterTimelineTableViewCell.singleLineUILabel()
 	
-	private lazy var avatarImageView: UIImageView = {
-		let imageView = NonIntrinsicImageView(image: AppAssets.feedImage)
-		imageView.contentMode = .scaleAspectFit
-		return imageView
-	}()
+	private lazy var avatarView = MasterTimelineAvatarView()
 	
 	private lazy var starView = {
 		return NonIntrinsicImageView(image: AppAssets.timelineStarImage)
@@ -38,21 +34,31 @@ class MasterTimelineTableViewCell: UITableViewCell {
 		commonInit()
 	}
 	
+	override func applyThemeProperties() {
+		super.applyThemeProperties()
+
+		let highlightedTextColor = AppAssets.tableViewCellHighlightedTextColor
+		
+		titleView.highlightedTextColor = highlightedTextColor
+		summaryView.highlightedTextColor = highlightedTextColor
+		dateView.highlightedTextColor = highlightedTextColor
+		feedNameView.highlightedTextColor = highlightedTextColor
+	}
+	
 	override var frame: CGRect {
 		didSet {
 			setNeedsLayout()
 		}
 	}
 	
+	override func setHighlighted(_ highlighted: Bool, animated: Bool) {
+		super.setHighlighted(highlighted, animated: animated)
+		unreadIndicatorView.isSelected = isHighlighted || isSelected
+	}
+
 	override func setSelected(_ selected: Bool, animated: Bool) {
-		let selectedTextColor = selected ? AppAssets.selectedTextColor : UIColor.label
-		titleView.textColor = selectedTextColor
-		summaryView.textColor = selectedTextColor
-		dateView.textColor = selectedTextColor
-		feedNameView.textColor = selectedTextColor
-		unreadIndicatorView.isSelected = selected
-		
 		super.setSelected(selected, animated: animated)
+		unreadIndicatorView.isSelected = isHighlighted || isSelected
 	}
 
 	override func sizeThatFits(_ size: CGSize) -> CGSize {
@@ -68,7 +74,7 @@ class MasterTimelineTableViewCell: UITableViewCell {
 
 		unreadIndicatorView.setFrameIfNotEqual(layout.unreadIndicatorRect)
 		starView.setFrameIfNotEqual(layout.starRect)
-		avatarImageView.setFrameIfNotEqual(layout.avatarImageRect)
+		avatarView.setFrameIfNotEqual(layout.avatarImageRect)
 		setFrame(for: titleView, rect: layout.titleRect)
 		setFrame(for: summaryView, rect: layout.summaryRect)
 		feedNameView.setFrameIfNotEqual(layout.feedNameRect)
@@ -76,6 +82,10 @@ class MasterTimelineTableViewCell: UITableViewCell {
 
 		separatorInset = layout.separatorInsets
 		
+	}
+	
+	func setAvatarImage(_ image: UIImage) {
+		avatarView.image = image
 	}
 	
 }
@@ -95,7 +105,7 @@ private extension MasterTimelineTableViewCell {
 	static func multiLineUILabel() -> UILabel {
 		let label = NonIntrinsicLabel()
 		label.numberOfLines = 0
-		label.lineBreakMode = .byWordWrapping
+		label.lineBreakMode = .byTruncatingTail
 		label.allowsDefaultTighteningForTruncation = false
 		label.adjustsFontForContentSizeCategory = true
 		return label
@@ -120,28 +130,16 @@ private extension MasterTimelineTableViewCell {
 	
 	func commonInit() {
 		
-		theme()
-		addAccessoryView()
 		addSubviewAtInit(titleView, hidden: false)
 		addSubviewAtInit(summaryView, hidden: true)
 		addSubviewAtInit(unreadIndicatorView, hidden: true)
 		addSubviewAtInit(dateView, hidden: false)
 		addSubviewAtInit(feedNameView, hidden: true)
-		addSubviewAtInit(avatarImageView, hidden: true)
+		addSubviewAtInit(avatarView, hidden: true)
 		addSubviewAtInit(starView, hidden: true)
 		
 	}
 	
-	func theme() {
-		let bgView = UIView()
-		bgView.backgroundColor = AppAssets.netNewsWireBlueColor
-		selectedBackgroundView = bgView
-	}
-
-	func addAccessoryView() {
-		accessoryView = UIImageView(image: AppAssets.chevronRightImage)
-	}
-
 	func updatedLayout(width: CGFloat) -> MasterTimelineCellLayout {
 		if UIApplication.shared.preferredContentSizeCategory.isAccessibilityCategory {
 			return MasterTimelineAccessibilityCellLayout(width: width, insets: safeAreaInsets, cellData: cellData)
@@ -204,23 +202,23 @@ private extension MasterTimelineTableViewCell {
 			return
 		}
 
-		showView(avatarImageView)
-		avatarImageView.layer.cornerRadius = MasterTimelineDefaultCellLayout.avatarCornerRadius
-		avatarImageView.clipsToBounds = true
+		showView(avatarView)
+		avatarView.layer.cornerRadius = MasterTimelineDefaultCellLayout.avatarCornerRadius
+		avatarView.clipsToBounds = true
 		
-		if avatarImageView.image !== cellData.avatar {
-			avatarImageView.image = image
+		if avatarView.image !== cellData.avatar {
+			avatarView.image = image
 			setNeedsLayout()
 		}
 	}
 	
 	func makeAvatarEmpty() {
 		
-		if avatarImageView.image != nil {
-			avatarImageView.image = nil
+		if avatarView.image != nil {
+			avatarView.image = nil
 			setNeedsLayout()
 		}
-		hideView(avatarImageView)
+		hideView(avatarView)
 	}
 	
 	func hideView(_ view: UIView) {

@@ -21,12 +21,15 @@ import os.log
 // Main thread only.
 
 public extension Notification.Name {
+	static let UserDidAddAccount = Notification.Name("UserDidAddAccount")
+	static let UserDidDeleteAccount = Notification.Name("UserDidDeleteAccount")
 	static let AccountRefreshDidBegin = Notification.Name(rawValue: "AccountRefreshDidBegin")
 	static let AccountRefreshDidFinish = Notification.Name(rawValue: "AccountRefreshDidFinish")
 	static let AccountRefreshProgressDidChange = Notification.Name(rawValue: "AccountRefreshProgressDidChange")
 	static let AccountDidDownloadArticles = Notification.Name(rawValue: "AccountDidDownloadArticles")
 	static let AccountStateDidChange = Notification.Name(rawValue: "AccountStateDidChange")
 	static let StatusesDidChange = Notification.Name(rawValue: "StatusesDidChange")
+	static let FeedMetadataDidChange = Notification.Name(rawValue: "FeedMetadataDidChange")
 }
 
 public enum AccountType: Int {
@@ -48,11 +51,13 @@ public enum FetchType {
 	case feed(Feed)
 	case articleIDs(Set<String>)
 	case search(String)
+	case searchWithArticleIDs(String, Set<String>)
 }
 
 public final class Account: DisplayNameProvider, UnreadCountProvider, Container, Hashable {
 
     public struct UserInfoKey {
+		public static let account = "account" // UserDidAddAccount, UserDidDeleteAccount
 		public static let newArticles = "newArticles" // AccountDidDownloadArticles
 		public static let updatedArticles = "updatedArticles" // AccountDidDownloadArticles
 		public static let statuses = "statuses" // StatusesDidChange
@@ -114,7 +119,9 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 		set {
 			if newValue != metadata.isActive {
 				metadata.isActive = newValue
-				NotificationCenter.default.post(name: .AccountStateDidChange, object: self, userInfo: nil)
+				var userInfo = [AnyHashable: Any]()
+				userInfo[UserInfoKey.account] = self
+				NotificationCenter.default.post(name: .AccountStateDidChange, object: self, userInfo: userInfo)
 			}
 		}
 	}
@@ -161,35 +168,23 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 	static let saveQueue = CoalescingQueue(name: "Account Save Queue", interval: 1.0)
 
 	private var unreadCounts = [String: Int]() // [feedID: Int]
-	private let opmlFilePath: String
 
 	private var _flattenedFeeds = Set<Feed>()
 	private var flattenedFeedsNeedUpdate = true
 
-	private let metadataPath: String
-	var metadata = AccountMetadata()
-	private var metadataDirty = false {
+	private lazy var opmlFile = OPMLFile(filename: (dataFolder as NSString).appendingPathComponent("Subscriptions.opml"), account: self)
+	private lazy var metadataFile = AccountMetadataFile(filename: (dataFolder as NSString).appendingPathComponent("Settings.plist"), account: self)
+	var metadata = AccountMetadata() {
 		didSet {
-			queueSaveAccountMetadatafNeeded()
+			delegate.accountMetadata = metadata
 		}
 	}
 
-	private let feedMetadataPath: String
-	private typealias FeedMetadataDictionary = [String: FeedMetadata]
-	private var feedMetadata = FeedMetadataDictionary()
-	private var feedMetadataDirty = false {
-		didSet {
-			queueSaveFeedMetadataIfNeeded()
-		}
-	}
+	private lazy var feedMetadataFile = FeedMetadataFile(filename: (dataFolder as NSString).appendingPathComponent("FeedMetadata.plist"), account: self)
+	typealias FeedMetadataDictionary = [String: FeedMetadata]
+	var feedMetadata = FeedMetadataDictionary()
 
-	private var startingUp = true
-
-	public var dirty = false {
-		didSet {
-			queueSaveToDiskIfNeeded()
-		}
-	}
+	var startingUp = true
 
     public var unreadCount = 0 {
         didSet {
@@ -199,12 +194,8 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
         }
     }
     
-	public var isTagBasedSystem: Bool {
-		return delegate.isTagBasedSystem
-	}
-	
-	public var isOPMLImportSupported: Bool {
-		return delegate.isOPMLImportSupported
+	public var behaviors: AccountBehaviors {
+		return delegate.behaviors
 	}
 	
 	var refreshInProgress = false {
@@ -215,7 +206,7 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 				}
 				else {
 					NotificationCenter.default.post(name: .AccountRefreshDidFinish, object: self)
-					queueSaveToDiskIfNeeded()
+					opmlFile.markAsDirty()
 				}
 			}
 		}
@@ -223,10 +214,6 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 
 	var refreshProgress: DownloadProgress {
 		return delegate.refreshProgress
-	}
-	
-	var isSubfoldersSupported: Bool {
-		return delegate.isSubfoldersSupported
 	}
 	
 	init?(dataFolder: String, type: AccountType, accountID: String, transport: Transport? = nil) {
@@ -237,21 +224,18 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 			self.delegate = FeedbinAccountDelegate(dataFolder: dataFolder, transport: transport)
 		case .freshRSS:
 			self.delegate = ReaderAPIAccountDelegate(dataFolder: dataFolder, transport: transport)
+		case .feedly:
+			self.delegate = FeedlyAccountDelegate(dataFolder: dataFolder, transport: transport)
 		default:
-			fatalError("Only Local and Feedbin accounts are supported")
+			return nil
 		}
 
 		self.accountID = accountID
 		self.type = type
 		self.dataFolder = dataFolder
 
-		self.opmlFilePath = (dataFolder as NSString).appendingPathComponent("Subscriptions.opml")
-
 		let databaseFilePath = (dataFolder as NSString).appendingPathComponent("DB.sqlite3")
 		self.database = ArticlesDatabase(databaseFilePath: databaseFilePath, accountID: accountID)
-
-		self.feedMetadataPath = (dataFolder as NSString).appendingPathComponent("FeedMetadata.plist")
-		self.metadataPath = (dataFolder as NSString).appendingPathComponent("Settings.plist")
 
 		switch type {
 		case .onMyMac:
@@ -274,8 +258,10 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 		NotificationCenter.default.addObserver(self, selector: #selector(displayNameDidChange(_:)), name: .DisplayNameDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(childrenDidChange(_:)), name: .ChildrenDidChange, object: nil)
 
-		pullObjectsFromDisk()
-		
+		metadataFile.load()
+		feedMetadataFile.load()
+		opmlFile.load()
+
 		DispatchQueue.main.async {
 			self.fetchAllUnreadCounts()
 		}
@@ -287,64 +273,31 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 	// MARK: - API
 	
 	public func storeCredentials(_ credentials: Credentials) throws {
+		username = credentials.username
 		guard let server = delegate.server else {
-			throw CredentialsError.incompleteCredentials
+			assertionFailure()
+			return
 		}
-		
-		switch credentials {
-		case .basic(let username, _):
-			self.username = username
-		case .readerAPIBasicLogin(let username, _):
-			self.username = username
-		case .readerAPIAuthLogin(let username, _):
-			self.username = username
-		}
-		
 		try CredentialsManager.storeCredentials(credentials, server: server)
-		
 		delegate.credentials = credentials
 	}
 	
-	public func retrieveCredentials() throws -> Credentials? {
-		switch type {
-		case .feedbin:
-			guard let username = self.username, let server = delegate.server else {
-				return nil
-			}
-			return try CredentialsManager.retrieveBasicCredentials(server: server, username: username)
-		case .freshRSS:
-			guard let username = self.username, let server = delegate.server else {
-				return nil
-			}
-			return try CredentialsManager.retrieveReaderAPIAuthCredentials(server: server, username: username)
-		default:
+	public func retrieveCredentials(type: CredentialsType) throws -> Credentials? {
+		guard let username = self.username, let server = delegate.server else {
 			return nil
 		}
+		return try CredentialsManager.retrieveCredentials(type: type, server: server, username: username)
 	}
 	
-	public func removeCredentials() throws {
-		switch type {
-		case .feedbin:
-			guard let username = self.username, let server = delegate.server else {
-				return
-			}
-			try CredentialsManager.removeBasicCredentials(server: server, username: username)
-			self.username = nil
-		case .freshRSS:
-			guard let username = self.username, let server = delegate.server else {
-				return
-			}
-			try CredentialsManager.removeReaderAPIAuthCredentials(server: server, username: username)
-			self.username = nil
-		default:
-			break
+	public func removeCredentials(type: CredentialsType) throws {
+		guard let username = self.username, let server = delegate.server else {
+			return
 		}
+		try CredentialsManager.removeCredentials(type: type, server: server, username: username)
 	}
 	
 	public static func validateCredentials(transport: Transport = URLSession.webserviceTransport(), type: AccountType, credentials: Credentials, endpoint: URL? = nil, completion: @escaping (Result<Credentials?, Error>) -> Void) {
 		switch type {
-		case .onMyMac:
-			LocalAccountDelegate.validateCredentials(transport: transport, credentials: credentials, completion: completion)
 		case .feedbin:
 			FeedbinAccountDelegate.validateCredentials(transport: transport, credentials: credentials, completion: completion)
 		case .freshRSS:
@@ -352,6 +305,35 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 		default:
 			break
 		}
+	}
+	
+	public static func oauthAuthorizationCodeGrantRequest(for type: AccountType, client: OAuthAuthorizationClient) -> URLRequest {
+		let grantingType: OAuthAuthorizationGranting.Type
+		switch type {
+		case .feedly:
+			grantingType = FeedlyAccountDelegate.self
+		default:
+			fatalError("\(type) does not support OAuth authorization code granting.")
+		}
+		
+		return grantingType.oauthAuthorizationCodeGrantRequest(for: client)
+	}
+	
+	public static func requestOAuthAccessToken(with response: OAuthAuthorizationResponse,
+											   client: OAuthAuthorizationClient,
+											   accountType: AccountType,
+											   transport: Transport = URLSession.webserviceTransport(),
+											   completionHandler: @escaping (Result<OAuthAuthorizationGrant, Error>) -> ()) {
+		let grantingType: OAuthAuthorizationGranting.Type
+		
+		switch accountType {
+		case .feedly:
+			grantingType = FeedlyAccountDelegate.self
+		default:
+			fatalError("\(accountType) does not support OAuth authorization code granting.")
+		}
+		
+		grantingType.requestOAuthAccessToken(with: response, client: client, transport: transport, completionHandler: completionHandler)
 	}
 
 	public func refreshAll(completion: @escaping (Result<Void, Error>) -> Void) {
@@ -386,12 +368,65 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 		
 	}
 	
+	public func saveIfNecessary() {
+		metadataFile.saveIfNecessary()
+		feedMetadataFile.saveIfNecessary()
+		opmlFile.saveIfNecessary()
+	}
+	
+	func loadOPMLItems(_ items: [RSOPMLItem], parentFolder: Folder?) {
+		var feedsToAdd = Set<Feed>()
+
+		items.forEach { (item) in
+
+			if let feedSpecifier = item.feedSpecifier {
+				let feed = newFeed(with: feedSpecifier)
+				feedsToAdd.insert(feed)
+				return
+			}
+
+			guard let folderName = item.titleFromAttributes else {
+				// Folder doesn’t have a name, so it won’t be created, and its items will go one level up.
+				if let itemChildren = item.children {
+					loadOPMLItems(itemChildren, parentFolder: parentFolder)
+				}
+				return
+			}
+
+			if let folder = ensureFolder(with: folderName) {
+				folder.externalID = item.attributes?["nnw_externalID"] as? String
+				if let itemChildren = item.children {
+					loadOPMLItems(itemChildren, parentFolder: folder)
+				}
+			}
+		}
+
+		if let parentFolder = parentFolder {
+			for feed in feedsToAdd {
+				parentFolder.addFeed(feed)
+			}
+		} else {
+			for feed in feedsToAdd {
+				addFeed(feed)
+			}
+		}
+		
+	}
+	
+	public func resetFeedMetadataAndUnreadCounts() {
+		for feed in flattenedFeeds() {
+			feed.metadata = feedMetadata(feedURL: feed.url, feedID: feed.feedID)
+		}
+		fetchAllUnreadCounts()
+		NotificationCenter.default.post(name: .FeedMetadataDidChange, object: self, userInfo: nil)
+	}
+	
 	public func markArticles(_ articles: Set<Article>, statusKey: ArticleStatus.Key, flag: Bool) -> Set<Article>? {
 		return delegate.markArticles(for: self, articles: articles, statusKey: statusKey, flag: flag)
 	}
 
 	@discardableResult
-	public func ensureFolder(with name: String) -> Folder? {
+	func ensureFolder(with name: String) -> Folder? {
 		// TODO: support subfolders, maybe, some day
 
 		if name.isEmpty {
@@ -491,19 +526,6 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 		structureDidChange()
 	}
 	
-	func loadOPML(_ opmlDocument: RSOPMLDocument) {
-		guard let children = opmlDocument.children else {
-			return
-		}
-		loadOPMLItems(children, parentFolder: nil)
-		structureDidChange()
-
-		DispatchQueue.main.async {
-			self.refreshAll() { result in }
-		}
-		
-	}
-
 	public func updateUnreadCounts(for feeds: Set<Feed>) {
 		if feeds.isEmpty {
 			return
@@ -534,6 +556,8 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 			return fetchArticles(articleIDs: articleIDs)
 		case .search(let searchString):
 			return fetchArticlesMatching(searchString)
+		case .searchWithArticleIDs(let searchString, let articleIDs):
+			return fetchArticlesMatchingWithArticleIDs(searchString, articleIDs)
 		}
 	}
 
@@ -553,6 +577,8 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 			fetchArticlesAsync(articleIDs: articleIDs, callback)
 		case .search(let searchString):
 			fetchArticlesMatchingAsync(searchString, callback)
+		case .searchWithArticleIDs(let searchString, let articleIDs):
+			return fetchArticlesMatchingWithArticleIDsAsync(searchString, articleIDs, callback)
 		}
 	}
 
@@ -564,42 +590,16 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 		database.fetchStarredAndUnreadCount(for: flattenedFeeds().feedIDs(), callback: callback)
 	}
 
-	public func fetchUnreadArticleIDs(_ callback: @escaping (Set<String>) -> Void) {
-		database.fetchUnreadArticleIDs(callback)
+	public func fetchUnreadArticleIDs() -> Set<String> {
+		return database.fetchUnreadArticleIDs()
 	}
 
-	public func fetchStarredArticleIDs(_ callback: @escaping (Set<String>) -> Void) {
-		database.fetchStarredArticleIDs(callback)
+	public func fetchStarredArticleIDs() -> Set<String> {
+		return database.fetchStarredArticleIDs()
 	}
 	
-	public func fetchArticleIDsForStatusesWithoutArticles(_ callback: @escaping (Set<String>) -> Void) {
-		database.fetchArticleIDsForStatusesWithoutArticles(callback)
-	}
-
-	public func opmlDocument() -> String {
-		let escapedTitle = nameForDisplay.rs_stringByEscapingSpecialXMLCharacters()
-		let openingText =
-		"""
-		<?xml version="1.0" encoding="UTF-8"?>
-		<!-- OPML generated by NetNewsWire -->
-		<opml version="1.1">
-		<head>
-		<title>\(escapedTitle)</title>
-		</head>
-		<body>
-
-		"""
-
-		let middleText = OPMLString(indentLevel: 0)
-
-		let closingText =
-		"""
-				</body>
-			</opml>
-			"""
-
-		let opml = openingText + middleText + closingText
-		return opml
+	public func fetchArticleIDsForStatusesWithoutArticles() -> Set<String> {
+		return database.fetchArticleIDsForStatusesWithoutArticles()
 	}
 
 	public func unreadCount(for feed: Feed) -> Int {
@@ -614,7 +614,7 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 		// Feeds were added or deleted. Or folders added or deleted.
 		// Or feeds inside folders were added or deleted.
 		if !startingUp {
-			dirty = true
+			opmlFile.markAsDirty()
 		}
 		flattenedFeedsNeedUpdate = true
 		feedDictionaryNeedsUpdate = true
@@ -657,12 +657,12 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 		return updatedArticles
 	}
 
-	func ensureStatuses(_ articleIDs: Set<String>, _ statusKey: ArticleStatus.Key, _ flag: Bool) {
+	func ensureStatuses(_ articleIDs: Set<String>, _ defaultRead: Bool, _ statusKey: ArticleStatus.Key, _ flag: Bool) {
 		if !articleIDs.isEmpty {
-			database.ensureStatuses(articleIDs, statusKey, flag)
+			database.ensureStatuses(articleIDs, defaultRead, statusKey, flag)
 		}
 	}
-	
+
 	// MARK: - Container
 
 	public func flattenedFeeds() -> Set<Feed> {
@@ -757,24 +757,6 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 		}
 	}
 
-	@objc func saveToDiskIfNeeded() {
-		if dirty && !isDeleted {
-			saveToDisk()
-		}
-	}
-
-	@objc func saveFeedMetadataIfNeeded() {
-		if feedMetadataDirty && !isDeleted {
-			saveFeedMetadata()
-		}
-	}
-
-	@objc func saveAccountMetadataIfNeeded() {
-		if metadataDirty && !isDeleted {
-			saveAccountMetadata()
-		}
-	}
-
 	// MARK: - Hashable
 
 	public func hash(into hasher: inout Hasher) {
@@ -792,7 +774,7 @@ public final class Account: DisplayNameProvider, UnreadCountProvider, Container,
 
 extension Account: AccountMetadataDelegate {
 	func valueDidChange(_ accountMetadata: AccountMetadata, key: AccountMetadata.CodingKeys) {
-		metadataDirty = true
+		metadataFile.markAsDirty()
 	}
 }
 
@@ -801,8 +783,8 @@ extension Account: AccountMetadataDelegate {
 extension Account: FeedMetadataDelegate {
 
 	func valueDidChange(_ feedMetadata: FeedMetadata, key: FeedMetadata.CodingKeys) {
-		feedMetadataDirty = true
-		guard let feed = existingFeed(with: feedMetadata.feedID) else {
+		feedMetadataFile.markAsDirty()
+		guard let feed = existingFeed(withFeedID: feedMetadata.feedID) else {
 			return
 		}
 		feed.postFeedSettingDidChangeNotification(key)
@@ -862,8 +844,16 @@ private extension Account {
 		return database.fetchArticlesMatching(searchString, flattenedFeeds().feedIDs())
 	}
 
+	func fetchArticlesMatchingWithArticleIDs(_ searchString: String, _ articleIDs: Set<String>) -> Set<Article> {
+		return database.fetchArticlesMatchingWithArticleIDs(searchString, articleIDs)
+	}
+	
 	func fetchArticlesMatchingAsync(_ searchString: String, _ callback: @escaping ArticleSetBlock) {
 		database.fetchArticlesMatchingAsync(searchString, flattenedFeeds().feedIDs(), callback)
+	}
+
+	func fetchArticlesMatchingWithArticleIDsAsync(_ searchString: String, _ articleIDs: Set<String>, _ callback: @escaping ArticleSetBlock) {
+		database.fetchArticlesMatchingWithArticleIDsAsync(searchString, articleIDs, callback)
 	}
 
 	func fetchArticles(articleIDs: Set<String>) -> Set<Article> {
@@ -934,134 +924,6 @@ private extension Account {
 	}
 }
 
-// MARK: - Disk (Private)
-
-private extension Account {
-	
-	func queueSaveToDiskIfNeeded() {
-		Account.saveQueue.add(self, #selector(saveToDiskIfNeeded))
-	}
-
-	func pullObjectsFromDisk() {
-		loadAccountMetadata()
-		loadFeedMetadata()
-		loadOPMLFile(path: opmlFilePath)
-	}
-
-	func loadAccountMetadata() {
-		let url = URL(fileURLWithPath: metadataPath)
-		guard let data = try? Data(contentsOf: url) else {
-			metadata.delegate = self
-			return
-		}
-		let decoder = PropertyListDecoder()
-		metadata = (try? decoder.decode(AccountMetadata.self, from: data)) ?? AccountMetadata()
-		metadata.delegate = self
-	}
-
-	func loadFeedMetadata() {
-		let url = URL(fileURLWithPath: feedMetadataPath)
-		guard let data = try? Data(contentsOf: url) else {
-			return
-		}
-		let decoder = PropertyListDecoder()
-		feedMetadata = (try? decoder.decode(FeedMetadataDictionary.self, from: data)) ?? FeedMetadataDictionary()
-		feedMetadata.values.forEach { $0.delegate = self }
-	}
-
-	func loadOPMLFile(path: String) {
-		let opmlFileURL = URL(fileURLWithPath: path)
-		var fileData: Data?
-		do {
-			fileData = try Data(contentsOf: opmlFileURL)
-		} catch {
-			// Commented out because it’s not an error on first run.
-			// TODO: make it so we know if it’s first run or not.
-			//NSApplication.shared.presentError(error)
-			return
-		}
-		guard let opmlData = fileData else {
-			return
-		}
-
-		let parserData = ParserData(url: opmlFileURL.absoluteString, data: opmlData)
-		var opmlDocument: RSOPMLDocument?
-
-		do {
-			opmlDocument = try RSOPMLParser.parseOPML(with: parserData)
-		} catch {
-			os_log(.error, log: log, "OPML Import failed: %@.", error.localizedDescription)
-			return
-		}
-		guard let parsedOPML = opmlDocument, let children = parsedOPML.children else {
-			return
-		}
-
-		BatchUpdate.shared.perform {
-			loadOPMLItems(children, parentFolder: nil)
-		}
-	}
-
-	func saveToDisk() {
-		dirty = false
-
-		let opmlDocumentString = opmlDocument()
-		do {
-			let url = URL(fileURLWithPath: opmlFilePath)
-			try opmlDocumentString.write(to: url, atomically: true, encoding: .utf8)
-		}
-		catch let error as NSError {
-			os_log(.error, log: log, "Save to disk failed: %@.", error.localizedDescription)
-		}
-	}
-
-	func queueSaveFeedMetadataIfNeeded() {
-		Account.saveQueue.add(self, #selector(saveFeedMetadataIfNeeded))
-	}
-
-	private func metadataForOnlySubscribedToFeeds() -> FeedMetadataDictionary {
-		let feedIDs = idToFeedDictionary.keys
-		return feedMetadata.filter { (feedID: String, metadata: FeedMetadata) -> Bool in
-			return feedIDs.contains(metadata.feedID)
-		}
-	}
-
-	func saveFeedMetadata() {
-		feedMetadataDirty = false
-
-		let d = metadataForOnlySubscribedToFeeds()
-		let encoder = PropertyListEncoder()
-		encoder.outputFormat = .binary
-		let url = URL(fileURLWithPath: feedMetadataPath)
-		do {
-			let data = try encoder.encode(d)
-			try data.write(to: url)
-		}
-		catch {
-			assertionFailure(error.localizedDescription)
-		}
-	}
-
-	func queueSaveAccountMetadatafNeeded() {
-		Account.saveQueue.add(self, #selector(saveAccountMetadataIfNeeded))
-	}
-
-	func saveAccountMetadata() {
-		metadataDirty = false
-
-		let encoder = PropertyListEncoder()
-		encoder.outputFormat = .binary
-		let url = URL(fileURLWithPath: metadataPath)
-		do {
-			let data = try encoder.encode(metadata)
-			try data.write(to: url)
-		}
-		catch {
-			assertionFailure(error.localizedDescription)
-		}
-	}
-}
-
 // MARK: - Private
 
 private extension Account {
@@ -1097,44 +959,6 @@ private extension Account {
 
 		_idToFeedDictionary = idDictionary
 		feedDictionaryNeedsUpdate = false
-	}
-
-	func loadOPMLItems(_ items: [RSOPMLItem], parentFolder: Folder?) {
-		var feedsToAdd = Set<Feed>()
-
-		items.forEach { (item) in
-
-			if let feedSpecifier = item.feedSpecifier {
-				let feed = newFeed(with: feedSpecifier)
-				feedsToAdd.insert(feed)
-				return
-			}
-
-			guard let folderName = item.titleFromAttributes else {
-				// Folder doesn’t have a name, so it won’t be created, and its items will go one level up.
-				if let itemChildren = item.children {
-					loadOPMLItems(itemChildren, parentFolder: parentFolder)
-				}
-				return
-			}
-
-			if let folder = ensureFolder(with: folderName) {
-				if let itemChildren = item.children {
-					loadOPMLItems(itemChildren, parentFolder: folder)
-				}
-			}
-		}
-
-		if let parentFolder = parentFolder {
-			for feed in feedsToAdd {
-				parentFolder.addFeed(feed)
-			}
-		} else {
-			for feed in feedsToAdd {
-				addFeed(feed)
-			}
-		}
-		
 	}
     
     func updateUnreadCount() {
@@ -1191,7 +1015,7 @@ private extension Account {
 
 extension Account {
 
-	public func existingFeed(with feedID: String) -> Feed? {
+	public func existingFeed(withFeedID feedID: String) -> Feed? {
 		return idToFeedDictionary[feedID]
 	}
 }
@@ -1200,13 +1024,13 @@ extension Account {
 
 extension Account: OPMLRepresentable {
 
-	public func OPMLString(indentLevel: Int) -> String {
+	public func OPMLString(indentLevel: Int, strictConformance: Bool) -> String {
 		var s = ""
 		for feed in topLevelFeeds {
-			s += feed.OPMLString(indentLevel: indentLevel + 1)
+			s += feed.OPMLString(indentLevel: indentLevel + 1, strictConformance: strictConformance)
 		}
 		for folder in folders! {
-			s += folder.OPMLString(indentLevel: indentLevel + 1)
+			s += folder.OPMLString(indentLevel: indentLevel + 1, strictConformance: strictConformance)
 		}
 		return s
 	}

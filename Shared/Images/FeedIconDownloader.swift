@@ -20,15 +20,28 @@ extension Notification.Name {
 
 public final class FeedIconDownloader {
 
+	private static let saveQueue = CoalescingQueue(name: "Cache Save Queue", interval: 1.0)
+
 	private let imageDownloader: ImageDownloader
+
 	private var homePageToIconURLCache = [String: String]()
+	private var homePageToIconURLCachePath: String
+	private var homePageToIconURLCacheDirty = false {
+		didSet {
+			queueSaveHomePageToIconURLCacheIfNeeded()
+		}
+	}
+	
 	private var homePagesWithNoIconURL = Set<String>()
 	private var urlsInProgress = Set<String>()
 	private var cache = [Feed: RSImage]()
+	private var waitingForFeedURLs = [String: Feed]()
 
-	init(imageDownloader: ImageDownloader) {
-
+	init(imageDownloader: ImageDownloader, folder: String) {
 		self.imageDownloader = imageDownloader
+		self.homePageToIconURLCachePath = (folder as NSString).appendingPathComponent("HomePageToIconURLCache.plist")
+		loadHomePageToIconURLCache()
+		NotificationCenter.default.addObserver(self, selector: #selector(imageDidBecomeAvailable(_:)), name: .ImageDidBecomeAvailable, object: imageDownloader)
 	}
 
 	func resetCache() {
@@ -45,7 +58,7 @@ public final class FeedIconDownloader {
 			guard let homePageURL = feed.homePageURL else {
 				return
 			}
-			icon(forHomePageURL: homePageURL) { (image) in
+			icon(forHomePageURL: homePageURL, feed: feed) { (image) in
 				if let image = image {
 					self.postFeedIconDidBecomeAvailableNotification(feed)
 					self.cache[feed] = image
@@ -54,7 +67,7 @@ public final class FeedIconDownloader {
 		}
 
 		if let iconURL = feed.iconURL {
-			icon(forURL: iconURL) { (image) in
+			icon(forURL: iconURL, feed: feed) { (image) in
 				if let image = image {
 					self.postFeedIconDidBecomeAvailableNotification(feed)
 					self.cache[feed] = image
@@ -71,11 +84,26 @@ public final class FeedIconDownloader {
 
 		return nil
 	}
+
+	@objc func imageDidBecomeAvailable(_ note: Notification) {
+		guard let url = note.userInfo?[UserInfoKey.url] as? String, let feed = waitingForFeedURLs[url]  else {
+			return
+		}
+		waitingForFeedURLs[url] = nil
+		_ = icon(for: feed)
+	}
+	
+	@objc func saveHomePageToIconURLCacheIfNeeded() {
+		if homePageToIconURLCacheDirty {
+			saveHomePageToIconURLCache()
+		}
+	}
+	
 }
 
 private extension FeedIconDownloader {
 
-	func icon(forHomePageURL homePageURL: String, _ imageResultBlock: @escaping (RSImage?) -> Void) {
+	func icon(forHomePageURL homePageURL: String, feed: Feed, _ imageResultBlock: @escaping (RSImage?) -> Void) {
 
 		if homePagesWithNoIconURL.contains(homePageURL) {
 			imageResultBlock(nil)
@@ -83,14 +111,15 @@ private extension FeedIconDownloader {
 		}
 
 		if let iconURL = cachedIconURL(for: homePageURL) {
-			icon(forURL: iconURL, imageResultBlock)
+			icon(forURL: iconURL, feed: feed, imageResultBlock)
 			return
 		}
 
-		findIconURLForHomePageURL(homePageURL)
+		findIconURLForHomePageURL(homePageURL, feed: feed)
 	}
 
-	func icon(forURL url: String, _ imageResultBlock: @escaping (RSImage?) -> Void) {
+	func icon(forURL url: String, feed: Feed, _ imageResultBlock: @escaping (RSImage?) -> Void) {
+		waitingForFeedURLs[url] = feed
 		guard let imageData = imageDownloader.image(for: url) else {
 			imageResultBlock(nil)
 			return
@@ -112,12 +141,12 @@ private extension FeedIconDownloader {
 	}
 
 	func cacheIconURL(for homePageURL: String, _ iconURL: String) {
-
 		homePagesWithNoIconURL.remove(homePageURL)
 		homePageToIconURLCache[homePageURL] = iconURL
+		homePageToIconURLCacheDirty = true
 	}
 
-	func findIconURLForHomePageURL(_ homePageURL: String) {
+	func findIconURLForHomePageURL(_ homePageURL: String, feed: Feed) {
 
 		guard !urlsInProgress.contains(homePageURL) else {
 			return
@@ -130,19 +159,47 @@ private extension FeedIconDownloader {
 			guard let metadata = metadata else {
 				return
 			}
-			self.pullIconURL(from: metadata, homePageURL: homePageURL)
+			self.pullIconURL(from: metadata, homePageURL: homePageURL, feed: feed)
 		}
 	}
 
-	func pullIconURL(from metadata: RSHTMLMetadata, homePageURL: String) {
+	func pullIconURL(from metadata: RSHTMLMetadata, homePageURL: String, feed: Feed) {
 
 		if let url = metadata.bestWebsiteIconURL() {
 			cacheIconURL(for: homePageURL, url)
-			icon(forURL: url) { (image) in
+			icon(forURL: url, feed: feed) { (image) in
 			}
 			return
 		}
 
 		homePagesWithNoIconURL.insert(homePageURL)
 	}
+	
+	func loadHomePageToIconURLCache() {
+		let url = URL(fileURLWithPath: homePageToIconURLCachePath)
+		guard let data = try? Data(contentsOf: url) else {
+			return
+		}
+		let decoder = PropertyListDecoder()
+		homePageToIconURLCache = (try? decoder.decode([String: String].self, from: data)) ?? [String: String]()
+	}
+
+	func queueSaveHomePageToIconURLCacheIfNeeded() {
+		FeedIconDownloader.saveQueue.add(self, #selector(saveHomePageToIconURLCacheIfNeeded))
+	}
+
+	func saveHomePageToIconURLCache() {
+		homePageToIconURLCacheDirty = false
+
+		let encoder = PropertyListEncoder()
+		encoder.outputFormat = .binary
+		let url = URL(fileURLWithPath: homePageToIconURLCachePath)
+		do {
+			let data = try encoder.encode(homePageToIconURLCache)
+			try data.write(to: url)
+		} catch {
+			assertionFailure(error.localizedDescription)
+		}
+	}
+	
 }

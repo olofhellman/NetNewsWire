@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import RSCore
 import Articles
 import Account
 
@@ -42,11 +43,17 @@ private func accountAndArticlesDictionary(_ articles: Set<Article>) -> [String: 
 extension Article {
 	
 	var feed: Feed? {
-		return account?.existingFeed(with: feedID)
+		return account?.existingFeed(withFeedID: feedID)
 	}
 	
 	var preferredLink: String? {
-		return url ?? externalURL
+		if let url = url, !url.isEmpty {
+			return url
+		}
+		if let externalURL = externalURL, !externalURL.isEmpty {
+			return externalURL
+		}
+		return nil
 	}
 	
 	var body: String? {
@@ -56,4 +63,52 @@ extension Article {
 	var logicalDatePublished: Date {
 		return datePublished ?? dateModified ?? status.dateArrived
 	}
+
+	func avatarImage() -> RSImage? {
+		if let authors = authors {
+			for author in authors {
+				if let image = appDelegate.authorAvatarDownloader.image(for: author) {
+					return image
+				}
+			}
+		}
+		
+		guard let feed = feed else {
+			return nil
+		}
+		
+		let feedIconImage = appDelegate.feedIconDownloader.icon(for: feed)
+		if feedIconImage != nil {
+			return feedIconImage
+		}
+		
+		if let faviconImage = appDelegate.faviconDownloader.faviconAsAvatar(for: feed) {
+			return faviconImage
+		}
+		
+		return FaviconGenerator.favicon(feed)
+	}
+	
+}
+
+// MARK: SortableArticle
+
+extension Article: SortableArticle {
+	
+	var sortableName: String {
+		return feed?.name ?? ""
+	}
+	
+	var sortableDate: Date {
+		return logicalDatePublished
+	}
+	
+	var sortableArticleID: String {
+		return articleID
+	}
+	
+	var sortableFeedID: String {
+		return feedID
+	}
+	
 }

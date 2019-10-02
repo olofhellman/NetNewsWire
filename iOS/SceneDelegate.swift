@@ -7,30 +7,42 @@
 //
 
 import UIKit
+import Account
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 	
     var window: UIWindow?
-	var coordinator = AppCoordinator()
+	var coordinator = SceneCoordinator()
 	
     // UIWindowScene delegate
     
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
-
-		window = UIWindow(windowScene: scene as! UIWindowScene)
-		window!.tintColor = AppAssets.netNewsWireBlueColor
-		window!.rootViewController = coordinator.start()
-		window!.makeKeyAndVisible()
 		
-//        if let userActivity = connectionOptions.userActivities.first ?? session.stateRestorationActivity {
-//            if !configure(window: window, with: userActivity) {
-//                print("Failed to restore from \(userActivity)")
-//            }
-//        }
+		window = UIWindow(windowScene: scene as! UIWindowScene)
+		window!.tintColor = AppAssets.primaryAccentColor
+		window!.rootViewController = coordinator.start(for: window!.frame.size)
 
-        // If there were no user activities, we don't have to do anything.
-        // The `window` property will automatically be loaded with the storyboard's initial view controller.
+		if let shortcutItem = connectionOptions.shortcutItem {
+			window!.makeKeyAndVisible()
+			handleShortcutItem(shortcutItem)
+			return
+		}
+		
+        if let userActivity = connectionOptions.userActivities.first ?? session.stateRestorationActivity {
+			self.coordinator.handle(userActivity)
+        }
+		
+		window!.makeKeyAndVisible()
     }
+	
+	func windowScene(_ windowScene: UIWindowScene, performActionFor shortcutItem: UIApplicationShortcutItem, completionHandler: @escaping (Bool) -> Void) {
+		handleShortcutItem(shortcutItem)
+		completionHandler(true)
+	}
+	
+	func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+		coordinator.handle(userActivity)
+	}
 	
 	func sceneDidEnterBackground(_ scene: UIScene) {
 		appDelegate.prepareAccountsForBackground()
@@ -40,27 +52,25 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 		appDelegate.prepareAccountsForForeground()
 	}
 	
-//    func stateRestorationActivity(for scene: UIScene) -> NSUserActivity? {
-//        return scene.userActivity
-//    }
-//
-    // Utilities
-    
-//    func configure(window: UIWindow?, with activity: NSUserActivity) -> Bool {
-//        if activity.title == GalleryOpenDetailPath {
-//            if let photoID = activity.userInfo?[GalleryOpenDetailPhotoIdKey] as? String {
-//
-//                if let photoDetailViewController = PhotoDetailViewController.loadFromStoryboard() {
-//                    photoDetailViewController.photo = Photo(name: photoID)
-//
-//                    if let navigationController = window?.rootViewController as? UINavigationController {
-//                        navigationController.pushViewController(photoDetailViewController, animated: false)
-//                        return true
-//                    }
-//                }
-//            }
-//        }
-//        return false
-//     }
+    func stateRestorationActivity(for scene: UIScene) -> NSUserActivity? {
+		return coordinator.stateRestorationActivity
+    }
 
+}
+
+private extension SceneDelegate {
+	
+	func handleShortcutItem(_ shortcutItem: UIApplicationShortcutItem) {
+		switch shortcutItem.type {
+		case "com.ranchero.NetNewsWire.FirstUnread":
+			coordinator.selectFirstUnreadInAllUnread()
+		case "com.ranchero.NetNewsWire.ShowSearch":
+			coordinator.showSearch()
+		case "com.ranchero.NetNewsWire.ShowAdd":
+			coordinator.showAdd(.feed)
+		default:
+			break
+		}
+	}
+	
 }

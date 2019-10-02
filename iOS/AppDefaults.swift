@@ -10,29 +10,51 @@ import UIKit
 
 struct AppDefaults {
 
+	static var shared =  UserDefaults.init(suiteName: "group.\(Bundle.main.bundleIdentifier!)")!
+	
 	struct Key {
+		static let lastImageCacheFlushDate = "lastImageCacheFlushDate"
 		static let firstRunDate = "firstRunDate"
+		static let timelineGroupByFeed = "timelineGroupByFeed"
+		static let timelineNumberOfLines = "timelineNumberOfLines"
 		static let timelineSortDirection = "timelineSortDirection"
 		static let refreshInterval = "refreshInterval"
 		static let lastRefresh = "lastRefresh"
-		static let timelineNumberOfLines = "timelineNumberOfLines"
 	}
 
 	static let isFirstRun: Bool = {
-		if let _ = UserDefaults.standard.object(forKey: Key.firstRunDate) as? Date {
+		if let _ = AppDefaults.shared.object(forKey: Key.firstRunDate) as? Date {
 			return false
 		}
 		firstRunDate = Date()
 		return true
 	}()
 	
+	static var lastImageCacheFlushDate: Date? {
+		get {
+			return date(for: Key.lastImageCacheFlushDate)
+		}
+		set {
+			setDate(for: Key.lastImageCacheFlushDate, newValue)
+		}
+	}
+
 	static var refreshInterval: RefreshInterval {
 		get {
-			let rawValue = UserDefaults.standard.integer(forKey: Key.refreshInterval)
+			let rawValue = AppDefaults.shared.integer(forKey: Key.refreshInterval)
 			return RefreshInterval(rawValue: rawValue) ?? RefreshInterval.everyHour
 		}
 		set {
-			UserDefaults.standard.set(newValue.rawValue, forKey: Key.refreshInterval)
+			AppDefaults.shared.set(newValue.rawValue, forKey: Key.refreshInterval)
+		}
+	}
+	
+	static var timelineGroupByFeed: Bool {
+		get {
+			return bool(for: Key.timelineGroupByFeed)
+		}
+		set {
+			setBool(for: Key.timelineGroupByFeed, newValue)
 		}
 	}
 
@@ -64,8 +86,12 @@ struct AppDefaults {
 	}
 	
 	static func registerDefaults() {
-		let defaults: [String : Any] = [Key.timelineSortDirection: ComparisonResult.orderedDescending.rawValue, Key.refreshInterval: RefreshInterval.everyHour.rawValue, Key.timelineNumberOfLines: 3]
-		UserDefaults.standard.register(defaults: defaults)
+		let defaults: [String : Any] = [Key.lastImageCacheFlushDate: Date(),
+										Key.refreshInterval: RefreshInterval.everyHour.rawValue,
+										Key.timelineGroupByFeed: false,
+										Key.timelineNumberOfLines: 3,
+										Key.timelineSortDirection: ComparisonResult.orderedDescending.rawValue]
+		AppDefaults.shared.register(defaults: defaults)
 	}
 
 }
@@ -82,27 +108,27 @@ private extension AppDefaults {
 	}
 
 	static func bool(for key: String) -> Bool {
-		return UserDefaults.standard.bool(forKey: key)
+		return AppDefaults.shared.bool(forKey: key)
 	}
 
 	static func setBool(for key: String, _ flag: Bool) {
-		UserDefaults.standard.set(flag, forKey: key)
+		AppDefaults.shared.set(flag, forKey: key)
 	}
 
 	static func int(for key: String) -> Int {
-		return UserDefaults.standard.integer(forKey: key)
+		return AppDefaults.shared.integer(forKey: key)
 	}
 	
 	static func setInt(for key: String, _ x: Int) {
-		UserDefaults.standard.set(x, forKey: key)
+		AppDefaults.shared.set(x, forKey: key)
 	}
 	
 	static func date(for key: String) -> Date? {
-		return UserDefaults.standard.object(forKey: key) as? Date
+		return AppDefaults.shared.object(forKey: key) as? Date
 	}
 
 	static func setDate(for key: String, _ date: Date?) {
-		UserDefaults.standard.set(date, forKey: key)
+		AppDefaults.shared.set(date, forKey: key)
 	}
 
 	static func sortDirection(for key:String) -> ComparisonResult {
